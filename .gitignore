@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+.cxx/
+vendor/rootfs/*.tar*
+vendor/rootfs/*.img
+vendor/rootfs/*.zst
