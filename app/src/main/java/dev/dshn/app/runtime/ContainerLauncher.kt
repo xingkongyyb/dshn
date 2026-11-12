@@ -53,7 +53,7 @@ class ContainerLauncher(private val context: Context) {
         "BXROOT_STUB_LOADER" to File(nativeLibDir, "libbxroot-stub-loader.so").absolutePath,
         "BXROOT_TMP_DIR" to tmpDir.absolutePath,
         "BXROOT_L2S_DIR" to File(rootfs, ".l2s").absolutePath,
-        "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PATH" to "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME" to "/root",
         "TERM" to "xterm-256color",
     )
