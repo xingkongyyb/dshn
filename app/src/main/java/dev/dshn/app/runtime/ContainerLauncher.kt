@@ -47,16 +47,22 @@ class ContainerLauncher(private val context: Context) {
         addAll(args)
     }
 
-    private fun environment(): Map<String, String> = mapOf(
-        "BXROOT_LIB_PATH" to File(nativeLibDir, "libbxroot-runtime.so").absolutePath,
-        "BXROOT_LINKER_PATH" to File(nativeLibDir, "libbxroot-ulx.so").absolutePath,
-        "BXROOT_STUB_LOADER" to File(nativeLibDir, "libbxroot-stub-loader.so").absolutePath,
-        "BXROOT_TMP_DIR" to tmpDir.absolutePath,
-        "BXROOT_L2S_DIR" to File(rootfs, ".l2s").absolutePath,
-        "PATH" to "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "HOME" to "/root",
-        "TERM" to "xterm-256color",
-    )
+    private fun environment(): Map<String, String> = buildMap {
+        put("BXROOT_LIB_PATH", File(nativeLibDir, "libbxroot-runtime.so").absolutePath)
+        put("BXROOT_LINKER_PATH", File(nativeLibDir, "libbxroot-ulx.so").absolutePath)
+        put("BXROOT_STUB_LOADER", File(nativeLibDir, "libbxroot-stub-loader.so").absolutePath)
+        put("BXROOT_TMP_DIR", tmpDir.absolutePath)
+        put("BXROOT_L2S_DIR", File(rootfs, ".l2s").absolutePath)
+        put("PATH", "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        put("HOME", "/root")
+        put("TERM", "xterm-256color")
+        // 模型凭据：从容器内密钥文件读取注入（密钥不进 git/源码）
+        val keyFile = File(rootfs, "root/.dsh/api_key")
+        if (keyFile.exists()) {
+            val key = keyFile.readText().trim()
+            if (key.isNotEmpty()) put("DEEPSEEK_API_KEY", key)
+        }
+    }
 
     /** 启动容器进程（stdio 管道，stderr 独立以便排空，设计 H6）。 */
     fun start(guestExe: String, vararg args: String): Process {
