@@ -45,6 +45,6 @@
 
 ## 5. 环境备注
 
-- bxroot `selftest HAS-FAILURE (fail=1)` 持续出现，但 bash/node/网络/PTY/ACP 协议全部正常——判定为良性内部探针失败，不阻塞；后续单独排查。
+- bxroot `selftest HAS-FAILURE (fail=1)` **已根治**（commit 6c0e171）：失败项 [4] rootfs 的 stat 钩子对 `/data/user/0` 路径形式报 ENOENT，对 `/data/data` 规范形式正常。ContainerLauncher rootfs 改用规范路径后 **selftest PASS (fail=0)**，9 项全 OK，功能不变。
 - 容器网络需修 `/etc/resolv.conf`（rootfs 默认悬挂符号链接→写真实 DNS）。
 - npm 原生模块需 `--allow-scripts` 放行（node-pty/koffi 等）。
