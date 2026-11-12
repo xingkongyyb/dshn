@@ -17,8 +17,12 @@ class ContainerLauncher(private val context: Context) {
     private val nativeLibDir: File = File(context.applicationInfo.nativeLibraryDir)
     private val launcher: File = File(nativeLibDir, "libbxroot.so")
 
-    /** 容器根文件系统（App 私有目录，bxroot 要求）。 */
-    val rootfs: File = File(context.filesDir, "linux/ubuntu")
+    /** 容器根文件系统（App 私有目录，bxroot 要求）。
+     *  用 /data/data 规范形式：bxroot init 自检的 stat 钩子对 /data/user/0 形式报 ENOENT。 */
+    val rootfs: File = File(
+        File(context.filesDir, "linux/ubuntu").absolutePath
+            .replaceFirst("/data/user/0/", "/data/data/")
+    )
 
     private val tmpDir: File = File(context.cacheDir, "bxroot-tmp").apply { mkdirs() }
 
