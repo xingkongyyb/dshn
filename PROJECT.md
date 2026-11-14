@@ -2,7 +2,7 @@
 
 > **DeepSeek Harness Native** —— 在 Android 上以原生 App 运行完整 DeepSeek Harness 智能体。
 > 免 ROOT、免 Termux、零 DSH 补丁。bxroot 用户态容器 + 原生 Compose UI + 标准 ACP 协议。
-> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-12。
+> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-14。
 
 ---
 
@@ -40,19 +40,23 @@ DSHN 让用户在手机上拥有一个完整的 DSH 编码智能体：原生界�
 DSH：Hello! It's great to meet you — how can I help today?
 ```
 
-### 2.2 完成度（对照设计 v2）
+### 2.2 完成度（对照设计 v2，2026-11-13 更新）
 
 | 设计模块 | 完成度 | 说明 |
 |---|---|---|
-| §7.1 integration-client（ACP） | 🟢 90% | 核心方法齐全；流式/审批已接线，待更多真机场景验证 |
-| §7.2 session-history | 🔴 0% | 未做（当前会话不持久化到 UI 历史） |
-| §7.3 runtime-supervisor | 🟡 40% | 有 stderr 排空 + 进程启动；看门狗/有界重启/单写者锁未做 |
-| §7.4 env-manager | 🟡 30% | 最小引导可用；事务化版本/状态快照/回滚未做 |
-| §7.5 device-bridge | 🔴 0% | 未做（无障碍/虚拟屏/ADB/传感器） |
-| §7.6 app-ui | 🟡 50% | 对话页可用；会话列表/设置页/终端页未做 |
-| §8 威胁模型/bind 集 | 🟡 40% | 最小 bind 不 bind sdcard；密钥隔离已做；UDS 设备桥未做 |
-| §9 保活 | 🔴 0% | 前台服务/幽灵进程/电池白名单未做 |
-| §16 开源设施 | 🔴 10% | 有 LICENSE 意图；CI/发布/双语文档未做 |
+| §7.1 integration-client（ACP） | 🟢 100% | 纯 Kotlin `AcpClient`：`initialize` / `session/new` / `session/resume` / `session/list` / `session/close` / `set_config_option` / `mcpServers` / `request_permission` / `badLines` 流异常监测（JVM 单测通过） |
+| §7.2 session-history | 🟢 95% | 只增式 `--patch` Cordis 插件 `dshn-session-bridge.mjs`（UDS `/run/dshn-bridge/session-bridge.sock`）+ `SurfaceHistoryFold`；损坏文件只读标记，不挪不改 |
+| §7.3 runtime-supervisor | 🟢 95% | 独立 `:runtime` 进程 `RuntimeService`（AIDL）+ `RuntimeSupervisor`：单写文件锁 + 孤儿 PID 清理 + stderr 环形日志 + 5s 看门狗 + 60s 内最多 3 次有界重启 + `TOOL_OUTCOME_UNKNOWN` + `@file:` 大负载传输 |
+| §7.4 env-manager | 🟢 95% | `EnvManager`：fsync 原子部署 `opt/dshn/`、`env-manifest.json`、两阶段 `~/.dsh` 快照与 `session.vN` 回滚兼容校验、容器自检（JVM 单测通过） |
+| §7.5 device-bridge | 🟢 95% | `DeviceBridgeMcpServer`（UDS `device-mcp.sock` + stdio relay）：默认全关；`DshnAccessibilityService` 读屏/点击/滑动/输入/截图；P2-3 真机 spike 确认 OriginOS 禁用了 `overlay_display_devices`，降级全屏；`WirelessAdbClient` + `AdbArgvPolicy` + `ConfirmationBroker` + `AuditLogger` |
+| §7.6 app-ui | 🟢 100% | 五标签原生 Material 3 UI：`ChatScreen`、`SessionsScreen`、`TerminalScreen`（`node-pty` + `DSH_HOME=/root/.dsh-terminal`）、`DeviceLabScreen`（设备桥试验台）、`SettingsScreen`（Keystore/权限/诊断导出/快照/双语），默认浅色 UI 并支持全局深浅一键切换 |
+| §8 威胁模型/bind 集 | 🟢 100% | 仅 bind `/dev` `/proc` `/sys` 与 `0700` `files/bridge:/run/dshn-bridge`（可选显式工作区），禁用备份导出；UDS 权限 `0600`；ADB 严苛 `argv` 白名单与逐次确认 |
+| §9 保活 | 🟢 90% | `foregroundServiceType="specialUse"` + 轮次内 `PARTIAL_WAKE_LOCK` + 通知权限/电池白名单引导 + 幽灵进程 `device_config` 指引 |
+| §16 开源设施 | 🟢 95% | `LICENSE` (MIT)、`THIRD_PARTY_NOTICES.md`（含 Ubuntu GPL 源码要约）、`CHANGELOG.md`、中英双语 `README`、GitHub Actions CI、Issue/PR 模板；待发布签名（P3-6） |
+
+**2026-11-13 P2-3 真机虚拟屏 Spike 结论（vivo V2352A / Android 16）**：
+- `adb shell "settings put global overlay_display_devices 720x1280/240"` 退出码 0，但 `settings get` 仍为 `null` 且 `dumpsys display` `OverlayDisplayAdapter` `mOverlays: size=0`；`cmd display` 无创建虚拟屏命令。因此默认降级为无障碍全屏交互，保留 `--display`/`display_id` 兼容参数。
+- 实测内核 `6.1.145-android14-11-maybe-dirty` 在 `bxroot` 内不支持 Landlock（`landlock-run` 退 125）：`bash` 执行需使用 `danger-full-access`，`workspace-write` 与 `read-only` 依靠 `fs-sandbox` + 审批拦截。
 
 ---
 
@@ -71,16 +75,23 @@ DSH：Hello! It's great to meet you — how can I help today?
         └ dsh --profile acp
 ```
 
-### 源码清单（`app/src/main/java/dev/dshn/app/`）
+### 源码清单（`app/src/main/java/dev/dshn/app/` 及 `assets/dshn/`）
 
 | 文件 | 职责 |
 |---|---|
-| `MainActivity.kt` | 入口，承载 ChatScreen |
-| `acp/AcpClient.kt` | ACP 协议客户端：initialize/session new/prompt/cancel/list/close/set_config_option；session/update 通知 Flow；request_permission 审批回调 |
-| `acp/AcpSessionManager.kt` | 接 bxroot 容器 `dsh --profile acp`，stderr 排空，握手 |
-| `runtime/ContainerLauncher.kt` | bxroot 启动：env 每次重生成、最小 bind、规范路径、凭据注入 |
-| `ui/ChatViewModel.kt` | 对话状态：消息流、流式累加、工具状态、审批 deferred |
-| `ui/ChatScreen.kt` | Compose 对话页：消息气泡、工具卡片、审批弹窗、输入/取消 |
+| `MainActivity.kt` | 入口，五标签导航（Chat / Sessions / Terminal / Lab / Settings）、状态栏明暗适配与全局权限/确认弹窗托管 |
+| `acp/AcpClient.kt` | ACP JSON-RPC 2.0 客户端（含 `mcpServers`、`resume`、动态 `configOptions`、流损坏监测） |
+| `acp/SurfaceHistoryFold.kt` | 把 `sessionQuery.readSurface()` 事件折叠为 UI 历史卡片并识别 `TOOL_OUTCOME_UNKNOWN` |
+| `runtime/ContainerLauncher.kt` | bxroot 启动封装：最小 bind 集（含 `0700` `bridge:/run/dshn-bridge`）、`--patch` 支持 |
+| `runtime/EnvManager.kt` | `env-manifest.json`、原子部署 `assets/dshn/`、DNS 修复、`~/.dsh` 事务快照与回滚兼容检查、容器自检 |
+| `runtime/SessionBridgeClient.kt` | UDS 客户端：会话列表、surface 历史、slash 命令、交互式 `ask_user_question` 订阅 |
+| `runtime/RuntimeSupervisor.kt` / `RuntimeService.kt` / `RuntimeController.kt` | 独立 `:runtime` 进程 AIDL 守护、`specialUse` 前台服务、单写锁、5s 看门狗、有界重启、Turn WakeLock、`@file:` 大负载传递 |
+| `runtime/TerminalPtySession.kt` | 基于容器内 `node-pty` 与独立 `DSH_HOME=/root/.dsh-terminal` 的终端控制器 |
+| `bridge/DeviceBridgeMcpServer.kt` / `DshnAccessibilityService.kt` / `WirelessAdbClient.kt` / `ConfirmationBroker.kt` | 设备桥 MCP 服务（UDS）、无障碍读屏/截图/手势、NSD + Plain-TCP/TLS ADB 客户端、高危操作逐次确认弹窗 |
+| `security/KeystoreCrypto.kt` / `AuditLogger.kt` / `AdbArgvPolicy.kt` | Keystore AES-GCM 加密、受限 `audit.jsonl` 审计、严苛 ADB `argv` 白名单 |
+| `data/SettingsStore.kt` | 加密凭据与权限/设备桥（默认全关）/浅色默认与深浅外观设置持久化 |
+| `ui/DshnTheme.kt`, `UiComponents.kt`, `MainViewModel.kt`, `ChatScreen.kt`, `SessionsScreen.kt`, `TerminalScreen.kt`, `DeviceLabScreen.kt`, `SettingsScreen.kt` | 浅色/深色主题系统、通用状态胶囊/一键深浅切换卡片组件、统一状态管理及 5 大业务界面 |
+| `assets/dshn/{dshn-bridge.patch.yml,dshn-session-bridge.mjs,dshn-mcp-relay.mjs,dshn-pty-runner.mjs}` | 只增式 Cordis `--patch` 插件、MCP UDS 转发器与 `node-pty` 启动器 |
 
 ### vendored 运行时
 
@@ -129,13 +140,13 @@ adb shell run-as dev.dshn.app tar -xf /data/local/tmp/...tar -C files/linux/ubun
 
 > 本节是项目 institutional knowledge，避免重复踩坑。
 
-### 5.1 中文 Windows 用户名构建坑（已固化进 gradle.properties）
+### 5.1 中文 Windows 用户名构建坑（构建兼容说明）
 
 | 坑 | 根因 | 解法 |
 |---|---|---|
-| AGP 拒绝非 ASCII 工程路径 | Windows 中文用户名 `天天` | `android.overridePathCheck=true` |
-| Kotlin 编译 `.alive` 文件 AccessDenied | JVM NIO 只能写工程目录，Temp 被系统策略拦 | `kotlin.compiler.execution.strategy=in-process` + tmpdir 指工程内 |
-| gradle.properties 中文路径乱码 | Gradle 按 Latin-1 读 properties，UTF-8 `天天`→`å¤©å¤©` | tmpdir 用 `\u5929\u5929` Unicode 转义 |
+| AGP 拒绝非 ASCII 工程路径 | Windows 中文用户目录 | `android.overridePathCheck=true` |
+| Kotlin 编译 `.alive` 文件 AccessDenied | JVM NIO 只能写工程目录，Temp 被系统策略拦 | `kotlin.compiler.execution.strategy=in-process` + 命令行 `GRADLE_OPTS` 指定 ASCII `tmpdir` |
+| `gradle.properties` 中文路径乱码 | Gradle 按 Latin-1 读 properties，UTF-8 非 ASCII 路径易乱码 | 若本地需要固定 tmpdir，通过环境变量/命令行传 `-Djava.io.tmpdir=...`（或 Unicode `\u` 转义），仓库内 `gradle.properties` 不硬编码本机用户绝对路径 |
 | Git Bash 转义 adb/icacls 路径 | MSYS 把 `/data/...`、`/grant` 转成 Windows 路径 | 命令前 `export MSYS_NO_PATHCONV=1` |
 
 ### 5.2 bxroot selftest HAS-FAILURE（已根治，commit 6c0e171）
@@ -209,12 +220,12 @@ adb shell run-as dev.dshn.app tar -xf /data/local/tmp/...tar -C files/linux/ubun
 | **P3-7 双语文档** | README zh/en + issue/PR 模板 + 诊断包 | 开源就绪 |
 | **P3-8 许可证合规** | Ubuntu GPL 组件源码要约 + DeepSeek 商标确认 | 合规 |
 
-### 待验证项（需真机 + 凭据）
+### 7.2 剩余待办与真机验收项
 
-- ACP `session/prompt` token 级流式增量粒度（H1）
-- `session/request_permission` 审批完整闭环（B2，UI 已接线）
-- ask-user 用户提问应答
-- 斜杠命令处理
+| 项 | 状态 | 说明 |
+|---|---|---|
+| **P3-6 签名发布** | ⏳ 待配置 | release keystore 托管与 GitHub Releases 渠道待后续发布时配置 |
+| **真机端到端回归（vivo V2352A）** | ✅ 已实测通过 | `app-debug.apk`（`2026-11-14`）真机通过：`:runtime` + `session-bridge.sock`（`HEALTHY`）、冷启历史恢复、实时 ACP 流式对话、会话列表、`node-pty` `/bin/bash -il` 终端、设备桥试验台（`tcpip 5555` + RSA 授权弹窗与 `[POLICY_BLOCKED]` + `audit.jsonl`）、浅色默认 UI 与全局深浅一键切换；注：无障碍受限设置本轮跳过 |
 
 ---
 
@@ -223,11 +234,11 @@ adb shell run-as dev.dshn.app tar -xf /data/local/tmp/...tar -C files/linux/ubun
 | 项 | 状态 | 处置 |
 |---|---|---|
 | ACP 多模态（image/audio）关闭 | 已知 | 需图片输入时评估 API Peer fallback |
-| 会话不持久化到 UI | 已知 | P2-5 session-query |
-| 环境更新非事务 | 已知 | P3-1，当前更新可能损坏 |
-| 无保活 | 已知 | P2-7，后台可能被杀 |
-| 设备桥未做 | 已知 | P2，agent 暂不能操作手机 |
-| 协议 pre-stable 漂移 | 风险 | 锁 DSH 版本区间 + 升级冒烟 |
+| 会话不持久化到 UI | 已解决（P2-5） | `session-bridge.sock` + `SurfaceHistoryFold` 持久化与恢复历史轮次 |
+| 环境更新非事务 | 已解决（P3-1） | `EnvManager` 清单校验、自检与快照创建/回滚已接入 |
+| 无保活 | 已解决（P2-7） | 独立 `:runtime` + `RuntimeService` 前台服务 + 有界自动重启 |
+| 设备桥未做 | 已解决（P2-1~P2-8） | `device-mcp.sock` 默认关闭、逐次确认与 ADB argv 白名单已接入 |
+| 协议 pre-stable 漂移 | 风险 | 锁 DSH 版本区间 + 升级冒烟（已兼容 `0.2.2-rc.1` `formatStatus: "current"`） |
 | bxroot 上游修复跟踪 | 风险 | vendored 锁 v0.2.5 + SHA256 |
 
 ---

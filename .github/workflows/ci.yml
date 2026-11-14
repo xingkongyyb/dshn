@@ -1,0 +1,38 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node 22 for JS syntax checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify DSHN bridge & helper JS syntax
+        run: |
+          node --check app/src/main/assets/dshn/dshn-mcp-relay.mjs
+          node --check app/src/main/assets/dshn/dshn-pty-runner.mjs
+          node --check app/src/main/assets/dshn/dshn-session-bridge.mjs
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Run JVM unit tests & assemble debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
