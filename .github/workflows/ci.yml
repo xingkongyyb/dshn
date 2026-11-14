@@ -29,13 +29,11 @@ jobs:
           node --check app/src/main/assets/dshn/dshn-pty-runner.mjs
           node --check app/src/main/assets/dshn/dshn-session-bridge.mjs
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-36
-            build-tools;36.0.0
+      - name: Setup Android SDK packages
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -name sdkmanager -type f | head -n1)"
+          awk 'BEGIN{for(i=0;i<50;i++)print "y"}' | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Run JVM unit tests & assemble debug APK
         run: |
