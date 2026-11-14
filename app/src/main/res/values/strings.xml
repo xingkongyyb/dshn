@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">DSHN</string>
+    <string name="accessibility_service_label">DSHN Device Bridge</string>
+    <string name="accessibility_service_description">Allows the local DeepSeek Harness agent to read structured UI trees, capture screenshots, and perform gestures when explicitly enabled and approved by you.</string>
+    <string name="runtime_special_use_sub_type">Runs a local Linux/Node agent runtime container to complete user-initiated coding and automation tasks continuously.</string>
+</resources>

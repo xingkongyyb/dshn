@@ -6,48 +6,66 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * bxroot 容器启动器封装。
- * 契约见 vendor/bxroot/PROVENANCE.md 与上游 docs/DSHA-适配说明.md：
- * launcher 从 argv 派生 ROOTFS/WORKDIR/FAKEROOT/LINK2SYMLINK；
- * App 侧只设 LIB_PATH/LINKER_PATH/STUB_LOADER/TMP_DIR/L2S_DIR。
- * 环境变量每次启动重生成（设计 H10：nativeLibraryDir 路径随安装变化）。
+ * bxroot container launcher wrapper.
+ * Paths are canonicalized to `/data/data/<pkg>/...` so bxroot selftests succeed on Android.
+ * Minimum bind set only (`/dev`, `/proc`, `/sys`, plus app-private bridge socket dir and optional explicit workspace).
  */
 class ContainerLauncher(private val context: Context) {
 
     private val nativeLibDir: File = File(context.applicationInfo.nativeLibraryDir)
     private val launcher: File = File(nativeLibDir, "libbxroot.so")
 
-    /** 容器根文件系统（App 私有目录，bxroot 要求）。
-     *  用 /data/data 规范形式：bxroot init 自检的 stat 钩子对 /data/user/0 形式报 ENOENT。 */
-    val rootfs: File = File(
-        File(context.filesDir, "linux/ubuntu").absolutePath
-            .replaceFirst("/data/user/0/", "/data/data/")
+    val rootFilesDir: File = File(
+        context.filesDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/")
     )
+
+    val rootfs: File = File(rootFilesDir, "linux/ubuntu")
+    val bridgeDir: File = File(rootFilesDir, "bridge").apply {
+        if (!exists()) mkdirs()
+        setReadable(false, false); setReadable(true, true)
+        setWritable(false, false); setWritable(true, true)
+        setExecutable(false, false); setExecutable(true, true)
+    }
 
     private val tmpDir: File = File(context.cacheDir, "bxroot-tmp").apply { mkdirs() }
 
-    /** 最小 bind 集（设计 §8：不 bind /sdcard，凭据区不入容器）。 */
-    private val binds: List<String> = listOf(
-        "/dev:/dev",
-        "/proc:/proc",
-        "/sys:/sys",
-    )
+    private fun binds(extraWorkspaceBind: String? = null): List<String> = buildList {
+        add("/dev:/dev")
+        add("/proc:/proc")
+        add("/sys:/sys")
+        add("${bridgeDir.absolutePath}:/run/dshn-bridge")
+        if (!extraWorkspaceBind.isNullOrBlank()) {
+            val host = File(extraWorkspaceBind)
+            if (host.exists() && host.isDirectory) {
+                add("${host.absolutePath}:/mnt/workspace")
+            }
+        }
+    }
 
     fun isReady(): Boolean = launcher.canExecute() && File(rootfs, "bin/sh").exists()
 
-    /** 构建 bxroot 命令行：launcher -r rootfs -0 -l -w /root [-b ...] <guest-exe> [args]。 */
-    private fun command(guestExe: String, args: List<String>): List<String> = buildList {
+    private fun command(
+        guestExe: String,
+        args: List<String>,
+        cwd: String = "/root",
+        extraWorkspaceBind: String? = null
+    ): List<String> = buildList {
         add(launcher.absolutePath)
         add("-r"); add(rootfs.absolutePath)
         add("-0")
         add("-l")
-        add("-w"); add("/root")
-        for (b in binds) { add("-b"); add(b) }
+        add("-w"); add(cwd)
+        for (b in binds(extraWorkspaceBind)) {
+            add("-b"); add(b)
+        }
         add(guestExe)
         addAll(args)
     }
 
-    private fun environment(): Map<String, String> = buildMap {
+    private fun environment(
+        permissionMode: String = "workspace-write",
+        extraEnv: Map<String, String> = emptyMap()
+    ): Map<String, String> = buildMap {
         put("BXROOT_LIB_PATH", File(nativeLibDir, "libbxroot-runtime.so").absolutePath)
         put("BXROOT_LINKER_PATH", File(nativeLibDir, "libbxroot-ulx.so").absolutePath)
         put("BXROOT_STUB_LOADER", File(nativeLibDir, "libbxroot-stub-loader.so").absolutePath)
@@ -56,40 +74,61 @@ class ContainerLauncher(private val context: Context) {
         put("PATH", "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         put("HOME", "/root")
         put("TERM", "xterm-256color")
-        // 模型凭据：从容器内密钥文件读取注入（密钥不进 git/源码）
+        put("LANG", "en_US.UTF-8")
+        put("LC_ALL", "en_US.UTF-8")
+        put("DSH_PERMISSION_MODE", permissionMode)
+        put("DSHN_SESSION_BRIDGE_SOCK", "/run/dshn-bridge/session-bridge.sock")
+        put("DSHN_DEVICE_MCP_SOCK", "/run/dshn-bridge/device-mcp.sock")
+
         val keyFile = File(rootfs, "root/.dsh/api_key")
         if (keyFile.exists()) {
-            val key = keyFile.readText().trim()
+            val key = runCatching { keyFile.readText().trim() }.getOrDefault("")
             if (key.isNotEmpty()) put("DEEPSEEK_API_KEY", key)
         }
+        putAll(extraEnv)
     }
 
-    /** 启动容器进程（stdio 管道，stderr 独立以便排空，设计 H6）。 */
-    fun start(guestExe: String, vararg args: String): Process {
-        val pb = ProcessBuilder(command(guestExe, args.toList()))
-        pb.environment().putAll(environment())
+    fun start(
+        guestExe: String,
+        vararg args: String,
+        cwd: String = "/root",
+        permissionMode: String = "workspace-write",
+        extraWorkspaceBind: String? = null,
+        extraEnv: Map<String, String> = emptyMap()
+    ): Process {
+        val cmd = command(guestExe, args.toList(), cwd = cwd, extraWorkspaceBind = extraWorkspaceBind)
+        val pb = ProcessBuilder(cmd)
+        pb.environment().putAll(environment(permissionMode = permissionMode, extraEnv = extraEnv))
         pb.redirectErrorStream(false)
-        Log.i(TAG, "launch: ${command(guestExe, args.toList()).joinToString(" ")}")
+        Log.i(TAG, "launch: $guestExe ${args.joinToString(" ")}")
         return pb.start()
     }
 
-    /** 同步跑一条命令，捕获 stdout/stderr（spike 验证用）。 */
-    fun runCapture(guestExe: String, vararg args: String, timeoutSec: Long = 60): Result {
-        val proc = start(guestExe, *args)
+    fun runCapture(
+        guestExe: String,
+        vararg args: String,
+        timeoutSec: Long = 60,
+        permissionMode: String = "workspace-write",
+        extraEnv: Map<String, String> = emptyMap()
+    ): Result {
+        val proc = start(guestExe, *args, permissionMode = permissionMode, extraEnv = extraEnv)
         val out = StringBuilder()
         val err = StringBuilder()
-        val tOut = Thread { proc.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
-        val tErr = Thread { proc.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
+        val tOut = Thread { runCatching { proc.inputStream.bufferedReader().forEachLine { out.appendLine(it) } } }
+        val tErr = Thread { runCatching { proc.errorStream.bufferedReader().forEachLine { err.appendLine(it) } } }
         tOut.start(); tErr.start()
         val finished = proc.waitFor(timeoutSec, TimeUnit.SECONDS)
-        if (!finished) { proc.destroyForcibly(); }
+        if (!finished) {
+            proc.destroyForcibly()
+        }
         tOut.join(2000); tErr.join(2000)
         val code = if (finished) proc.exitValue() else -1
-        Log.i(TAG, "exit=$code stdout=${out.toString().trim()} stderr=${err.toString().trim()}")
         return Result(code, out.toString(), err.toString())
     }
 
     data class Result(val exitCode: Int, val stdout: String, val stderr: String)
 
-    companion object { private const val TAG = "DSHN-Container" }
+    companion object {
+        private const val TAG = "DSHN-Container"
+    }
 }

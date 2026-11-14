@@ -1,0 +1,5 @@
+# Insert-only overlay for DSHN native Android integration.
+# Does not mutate any file inside @deepseek-ai/dsh.
+- insert:
+    - id: dshn-session-bridge
+      name: ./dshn-session-bridge.mjs

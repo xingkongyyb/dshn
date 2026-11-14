@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="file" path="linux" />
+    <exclude domain="file" path="security" />
+    <exclude domain="file" path="bridge" />
+    <exclude domain="file" path="runtime" />
+    <exclude domain="file" path="logs" />
+</full-backup-content>
