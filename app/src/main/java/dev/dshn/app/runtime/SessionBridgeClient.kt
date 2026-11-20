@@ -40,6 +40,8 @@ data class SessionSummaryItem(
     val createdAt: Long = 0L,
     val cwd: String? = null,
     val parentSession: String? = null,
+    val origin: String? = null,
+    val agentPreset: String? = null,
     val isSeeded: Boolean = false,
     val delegationDepth: Int = 0,
     val live: Boolean = false,

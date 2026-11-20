@@ -61,7 +61,8 @@ data class RuntimeStatusSnapshot(
     val nodeVersion: String,
     val rootfsReady: Boolean,
     val bridgePingOk: Boolean,
-    val permissionMode: String
+    val permissionMode: String,
+    val imagePromptSupported: Boolean = false
 )
 
 interface RuntimeEventSink {
@@ -216,7 +217,10 @@ class RuntimeSupervisor(
                 "--profile", "acp",
                 "--patch", "/opt/dshn/dshn-bridge.patch.yml",
                 permissionMode = settings.permissionMode.envValue,
-                extraWorkspaceBind = settings.extraWorkspaceBindHostPath
+                extraWorkspaceBind = settings.extraWorkspaceBindHostPath,
+                deepseekBaseUrl = settings.deepseekBaseUrl,
+                deepseekSearchBaseUrl = settings.deepseekSearchBaseUrl,
+                webSearchProvider = settings.webSearchProvider
             )
         } catch (t: Throwable) {
             updateState(RuntimeLifecycleState.ERROR, "Failed to spawn dsh container: ${t.message}")
@@ -266,7 +270,8 @@ class RuntimeSupervisor(
         try {
             updateState(RuntimeLifecycleState.STARTING, "Waiting for ACP initialize handshake...")
             val init = client.initialize(timeoutMs = 60_000)
-            appendLog("[acp] initialize ok: ${init["agentInfo"] ?: init}")
+            val caps = client.agentCapabilities
+            appendLog("[acp] initialize ok: ${init["agentInfo"] ?: init} (imagePrompt=${caps.imagePrompt}, httpMcp=${caps.httpMcp})")
         } catch (t: Throwable) {
             appendLog("[acp] initialize failed: ${t.message}")
             doStopLocked("ACP initialize failed: ${t.message}")
@@ -499,7 +504,13 @@ class RuntimeSupervisor(
                 val res = c.prompt(sessionId, text)
                 sink.onPromptCompleted(requestId, sessionId, res.stopReason, null)
             } catch (t: Throwable) {
-                sink.onPromptCompleted(requestId, sessionId, null, t.message ?: "Prompt failed")
+                val rawMsg = t.message ?: "Prompt failed"
+                val formatted = if ((t is dev.dshn.app.acp.AcpException && t.isContentRefused) || AcpClient.isContentRefusedMessage(rawMsg)) {
+                    "[CONTENT_REFUSED] $rawMsg"
+                } else {
+                    rawMsg
+                }
+                sink.onPromptCompleted(requestId, sessionId, null, formatted)
             } finally {
                 activePrompts.remove(requestId)
                 updateWakeLock()
@@ -555,7 +566,8 @@ class RuntimeSupervisor(
             nodeVersion = m.nodeVersion,
             rootfsReady = m.rootfsReady && launcher.isReady(),
             bridgePingOk = bridgePingOk,
-            permissionMode = s.permissionMode.envValue
+            permissionMode = s.permissionMode.envValue,
+            imagePromptSupported = acpClient?.agentCapabilities?.imagePrompt == true
         )
         return json.encodeToString(snapshot)
     }
@@ -684,7 +696,11 @@ class RuntimeSupervisor(
             put("sessionId", u.sessionId)
             put("toolCallId", u.toolCallId)
             put("status", u.status)
-            if (u.content != null) put("content", u.content)
+            if (u.content != null) {
+                put("content", u.content)
+                val extracted = AcpClient.extractToolUpdateContentText(u.content)
+                if (extracted.isNotEmpty()) put("contentText", extracted)
+            }
         }.toString()
         is SessionUpdate.UsageUpdate -> buildJsonObject {
             put("type", "usage_update")

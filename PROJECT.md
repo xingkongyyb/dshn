@@ -1,8 +1,8 @@
 # DSHN 项目文档
 
 > **DeepSeek Harness Native** —— 在 Android 上以原生 App 运行完整 DeepSeek Harness 智能体。
-> 免 ROOT、免 Termux、零 DSH 补丁。bxroot 用户态容器 + 原生 Compose UI + 标准 ACP 协议。
-> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-14。
+> 默认免 ROOT（亦支持已 Root 设备的可选标准 `su` 授权）、免 Termux、零 DSH 补丁。bxroot 用户态容器 + 原生 Compose UI + 标准 ACP 协议。
+> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-19（v0.2.0：适配 DSH `0.2.2-rc.5` + 新增 Root 授权功能）。
 
 ---
 
@@ -25,7 +25,7 @@ DSHN 让用户在手机上拥有一个完整的 DSH 编码智能体：原生界�
 |---|---|---|
 | 原生 Compose App 构建/安装/启动 | ✅ | BUILD SUCCESSFUL，真机启动 |
 | bxroot 运行时安全 vendoring | ✅ | 官方源 + 双重 SHA256 + AArch64 + 16KB 对齐 |
-| 容器栈引导 | ✅ | Ubuntu 24.04 + Node 24.19.0 + DSH 0.2.2-rc.1 |
+| 容器栈引导 | ✅ | Ubuntu 24.04 + Node 24.19.0 (`>=24.9.0`) + DSH `0.2.2-rc.5`（含事务化升级器） |
 | 容器网络 | ✅ | 修 resolv.conf，fetch 官方 registry 成功 |
 | 原生模块 | ✅ | node-pty `PTY_OK` |
 | bxroot selftest | ✅ | 9 项全 OK（fail=0） |
@@ -49,7 +49,7 @@ DSH：Hello! It's great to meet you — how can I help today?
 | §7.3 runtime-supervisor | 🟢 95% | 独立 `:runtime` 进程 `RuntimeService`（AIDL）+ `RuntimeSupervisor`：单写文件锁 + 孤儿 PID 清理 + stderr 环形日志 + 5s 看门狗 + 60s 内最多 3 次有界重启 + `TOOL_OUTCOME_UNKNOWN` + `@file:` 大负载传输 |
 | §7.4 env-manager | 🟢 95% | `EnvManager`：fsync 原子部署 `opt/dshn/`、`env-manifest.json`、两阶段 `~/.dsh` 快照与 `session.vN` 回滚兼容校验、容器自检（JVM 单测通过） |
 | §7.5 device-bridge | 🟢 95% | `DeviceBridgeMcpServer`（UDS `device-mcp.sock` + stdio relay）：默认全关；`DshnAccessibilityService` 读屏/点击/滑动/输入/截图；P2-3 真机 spike 确认 OriginOS 禁用了 `overlay_display_devices`，降级全屏；`WirelessAdbClient` + `AdbArgvPolicy` + `ConfirmationBroker` + `AuditLogger` |
-| §7.6 app-ui | 🟢 100% | 五标签原生 Material 3 UI：`ChatScreen`、`SessionsScreen`、`TerminalScreen`（`node-pty` + `DSH_HOME=/root/.dsh-terminal`）、`DeviceLabScreen`（设备桥试验台）、`SettingsScreen`（Keystore/权限/诊断导出/快照/双语），默认浅色 UI 并支持全局深浅一键切换 |
+| §7.6 app-ui | 🟢 100% | v0.3.0 重做为对话优先的原生 Material 3 UI：首启设置向导（`SetupScreen`）→ 对话主页（`ChatScreen`，左侧抽屉按日期分组的会话列表 + 搜索、Markdown 渲染、思考/工具卡片、模型与思考强度底部弹层、上下文用量）→ 分组设置页（模型与 API Key / 执行权限与工作目录 / 后台运行 / 运行环境与快照 / 日志诊断 / 关于）、`DeviceBridgeScreen`（设备桥与 Root）、`TerminalScreen`、`DeviceLabScreen`（调试台）；全部文案中英双语（`tr()`），浅色/深色/跟随系统，自带矢量自适应图标 |
 | §8 威胁模型/bind 集 | 🟢 100% | 仅 bind `/dev` `/proc` `/sys` 与 `0700` `files/bridge:/run/dshn-bridge`（可选显式工作区），禁用备份导出；UDS 权限 `0600`；ADB 严苛 `argv` 白名单与逐次确认 |
 | §9 保活 | 🟢 90% | `foregroundServiceType="specialUse"` + 轮次内 `PARTIAL_WAKE_LOCK` + 通知权限/电池白名单引导 + 幽灵进程 `device_config` 指引 |
 | §16 开源设施 | 🟢 95% | `LICENSE` (MIT)、`THIRD_PARTY_NOTICES.md`（含 Ubuntu GPL 源码要约）、`CHANGELOG.md`、中英双语 `README`、GitHub Actions CI、Issue/PR 模板；待发布签名（P3-6） |
@@ -79,7 +79,7 @@ DSH：Hello! It's great to meet you — how can I help today?
 
 | 文件 | 职责 |
 |---|---|
-| `MainActivity.kt` | 入口，五标签导航（Chat / Sessions / Terminal / Lab / Settings）、状态栏明暗适配与全局权限/确认弹窗托管 |
+| `MainActivity.kt` | 入口：首启向导闸门、路由回退栈（`AppRoute` + 动画切换 + 系统返回键）、带操作按钮的提示条、状态栏明暗适配与全局权限/确认弹窗托管 |
 | `acp/AcpClient.kt` | ACP JSON-RPC 2.0 客户端（含 `mcpServers`、`resume`、动态 `configOptions`、流损坏监测） |
 | `acp/SurfaceHistoryFold.kt` | 把 `sessionQuery.readSurface()` 事件折叠为 UI 历史卡片并识别 `TOOL_OUTCOME_UNKNOWN` |
 | `runtime/ContainerLauncher.kt` | bxroot 启动封装：最小 bind 集（含 `0700` `bridge:/run/dshn-bridge`）、`--patch` 支持 |
@@ -87,10 +87,11 @@ DSH：Hello! It's great to meet you — how can I help today?
 | `runtime/SessionBridgeClient.kt` | UDS 客户端：会话列表、surface 历史、slash 命令、交互式 `ask_user_question` 订阅 |
 | `runtime/RuntimeSupervisor.kt` / `RuntimeService.kt` / `RuntimeController.kt` | 独立 `:runtime` 进程 AIDL 守护、`specialUse` 前台服务、单写锁、5s 看门狗、有界重启、Turn WakeLock、`@file:` 大负载传递 |
 | `runtime/TerminalPtySession.kt` | 基于容器内 `node-pty` 与独立 `DSH_HOME=/root/.dsh-terminal` 的终端控制器 |
-| `bridge/DeviceBridgeMcpServer.kt` / `DshnAccessibilityService.kt` / `WirelessAdbClient.kt` / `ConfirmationBroker.kt` | 设备桥 MCP 服务（UDS）、无障碍读屏/截图/手势、NSD + Plain-TCP/TLS ADB 客户端、高危操作逐次确认弹窗 |
-| `security/KeystoreCrypto.kt` / `AuditLogger.kt` / `AdbArgvPolicy.kt` | Keystore AES-GCM 加密、受限 `audit.jsonl` 审计、严苛 ADB `argv` 白名单 |
+| `bridge/DeviceBridgeMcpServer.kt` / `DshnAccessibilityService.kt` / `WirelessAdbClient.kt` / `RootAuthManager.kt` / `ConfirmationBroker.kt` | 设备桥 MCP 服务（UDS，11 个固定工具含 `device_root_status` / `device_root_exec`）、无障碍读屏/截图/手势、NSD + Plain-TCP/TLS ADB 客户端、标准 `su` Root 授权与 TTL 管理、高危操作逐次确认弹窗 |
+| `runtime/HostRootShellSession.kt` | 基于已授权 `su` 的宿主机 Root 交互终端会话控制器 |
+| `security/KeystoreCrypto.kt` / `AuditLogger.kt` / `AdbArgvPolicy.kt` / `RootCommandPolicy.kt` | Keystore AES-GCM 加密、受限 `audit.jsonl` 审计、严苛 ADB / Root 结构化 `argv` 策略（硬隔离 `files/security/`） |
 | `data/SettingsStore.kt` | 加密凭据与权限/设备桥（默认全关）/浅色默认与深浅外观设置持久化 |
-| `ui/DshnTheme.kt`, `UiComponents.kt`, `MainViewModel.kt`, `ChatScreen.kt`, `SessionsScreen.kt`, `TerminalScreen.kt`, `DeviceLabScreen.kt`, `SettingsScreen.kt` | 浅色/深色主题系统、通用状态胶囊/一键深浅切换卡片组件、统一状态管理及 5 大业务界面 |
+| `ui/DshnTheme.kt`, `UiComponents.kt`, `MarkdownText.kt`, `SystemHelpers.kt`, `MainViewModel.kt`, `SetupScreen.kt`, `ChatScreen.kt`, `SettingsScreen.kt`, `DeviceBridgeScreen.kt`, `TerminalScreen.kt`, `DeviceLabScreen.kt` | 主题与 `tr()` 双语、品牌标识/设置行/横幅等通用组件、轻量 Markdown 渲染、统一状态与导航管理、首启向导与各业务界面 |
 | `assets/dshn/{dshn-bridge.patch.yml,dshn-session-bridge.mjs,dshn-mcp-relay.mjs,dshn-pty-runner.mjs}` | 只增式 Cordis `--patch` 插件、MCP UDS 转发器与 `node-pty` 启动器 |
 
 ### vendored 运行时

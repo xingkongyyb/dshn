@@ -54,8 +54,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.dshn.app.bridge.RootAuthStatus
 import dev.dshn.app.data.AdbTransportMode
 import dev.dshn.app.security.AdbArgvPolicy
+import dev.dshn.app.security.RootCommandPolicy
+import dev.dshn.app.security.RootPolicyMode
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -78,6 +81,8 @@ fun DeviceLabScreen(
     val adbScanning by vm.adbScanning.collectAsState()
     val adbIdentity by vm.adbIdentity.collectAsState()
     val adbProbe by vm.adbProbeState.collectAsState()
+    val rootAuth by vm.rootAuthState.collectAsState()
+    val rootAuthorizing by vm.rootAuthorizing.collectAsState()
     val labRunning by vm.labRunning.collectAsState()
     val labResult by vm.labLastResult.collectAsState()
     val auditEntries by vm.auditEntries.collectAsState()
@@ -86,6 +91,7 @@ fun DeviceLabScreen(
         mutableStateOf(settings.lastAdbEndpoint ?: "127.0.0.1:5555")
     }
     var customArgvDraft by remember { mutableStateOf("getprop ro.build.version.release") }
+    var customRootArgvDraft by remember { mutableStateOf("id") }
 
     val parsedCustomArgv = remember(customArgvDraft) {
         customArgvDraft.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
@@ -94,7 +100,24 @@ fun DeviceLabScreen(
         AdbArgvPolicy.evaluate(parsedCustomArgv)
     }
 
+    val parsedCustomRootArgv = remember(customRootArgvDraft) {
+        customRootArgvDraft.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    }
+    val customRootPreflight = remember(parsedCustomRootArgv, settings.rootPolicyMode) {
+        RootCommandPolicy.evaluate(parsedCustomRootArgv, settings.rootPolicyMode)
+    }
+
     val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+
+    fun dispatchRootExec(argv: List<String>) {
+        vm.runBridgeTrialTool(
+            "device_root_exec",
+            buildJsonObject {
+                putJsonArray("argv") { argv.forEach { add(it) } }
+                put("timeout_sec", 20)
+            }
+        )
+    }
 
     fun dispatchAdbExec(argv: List<String>) {
         val parts = endpointDraft.trim().split(':')
@@ -151,10 +174,6 @@ fun DeviceLabScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        ThemeQuickToggleButton(
-                            strings = strings,
-                            onToggle = { isDark -> vm.toggleLightDarkTheme(isDark) }
-                        )
                     }
 
                     FlowRow(
@@ -187,6 +206,21 @@ fun DeviceLabScreen(
                             text = if (accConnected) "Acc: ON" else "Acc: OFF (Skipped)",
                             tone = PillTone.NEUTRAL
                         )
+                        StatusPill(
+                            text = when (rootAuth.status) {
+                                RootAuthStatus.AUTHORIZED -> "Root: AUTHORIZED"
+                                RootAuthStatus.NO_SU_BINARY -> "Root: NO SU"
+                                RootAuthStatus.DENIED -> "Root: DENIED"
+                                RootAuthStatus.REVOKED -> "Root: REVOKED"
+                                else -> "Root: LOCKED"
+                            },
+                            tone = when (rootAuth.status) {
+                                RootAuthStatus.AUTHORIZED -> PillTone.SUCCESS
+                                RootAuthStatus.DENIED, RootAuthStatus.ERROR -> PillTone.ERROR
+                                else -> PillTone.NEUTRAL
+                            },
+                            showDot = true
+                        )
                     }
                 }
             }
@@ -206,6 +240,9 @@ fun DeviceLabScreen(
                     Button(onClick = { vm.enableAdbTrialPreset() }) {
                         Text("启用 ADB 试验开关组合")
                     }
+                    Button(onClick = { vm.enableRootTrialPreset() }) {
+                        Text("启用 Root 试验开关组合")
+                    }
                     OutlinedButton(onClick = { vm.lockAllDeviceBridgeSwitches() }) {
                         Text("全部锁定关闭")
                     }
@@ -217,13 +254,19 @@ fun DeviceLabScreen(
                     title = "Enable Device Bridge MCP",
                     subtitle = "主总闸：允许 device-mcp.sock 响应设备桥工具",
                     checked = settings.bridgeEnabled
-                ) { v -> vm.updateSettings { it.copy(bridgeEnabled = v) } }
+                ) { v -> vm.setBridgeEnabled(v) }
 
                 LabToggleRow(
                     title = "ADB Argv Bridge",
                     subtitle = "允许结构化白名单内的 device_adb_exec 调用（与 device_info）",
                     checked = settings.allowAdbBridge
                 ) { v -> vm.updateSettings { it.copy(allowAdbBridge = v) } }
+
+                LabToggleRow(
+                    title = "Host Root (`su`) Bridge",
+                    subtitle = "允许已授权状态下调用 device_root_status / device_root_exec",
+                    checked = settings.allowRootBridge
+                ) { v -> vm.updateSettings { it.copy(allowRootBridge = v) } }
 
                 LabToggleRow(
                     title = "Require Per-Call Confirmation",
@@ -351,9 +394,7 @@ fun DeviceLabScreen(
                     Button(
                         enabled = !adbProbe.probing && endpointDraft.contains(':'),
                         onClick = {
-                            val parts = endpointDraft.trim().split(':')
-                            val h = parts.getOrNull(0).orEmpty()
-                            val p = parts.getOrNull(1)?.toIntOrNull() ?: -1
+                            val (h, p) = parseHostPort(endpointDraft)
                             vm.testAdbConnection(h, p, settings.adbTransportMode)
                         }
                     ) {
@@ -391,6 +432,162 @@ fun DeviceLabScreen(
                             }
                         )
                     }
+                }
+            }
+        }
+
+        // Card 2b: Root Authorization (`su`) & Policy Trial
+        item {
+            val rootTone = when (rootAuth.status) {
+                RootAuthStatus.AUTHORIZED -> PillTone.SUCCESS
+                RootAuthStatus.DENIED, RootAuthStatus.ERROR -> PillTone.ERROR
+                RootAuthStatus.NOT_AUTHORIZED, RootAuthStatus.REVOKED -> PillTone.WARNING
+                else -> PillTone.NEUTRAL
+            }
+            DshnSectionCard(
+                title = "2b. Root 授权与特权策略试验台 (su)",
+                subtitle = "通过 Magisk / KernelSU / SukiSU / APatch 申请标准 su 授权，所有命令经 RootCommandPolicy + 逐次弹窗 + 审计校验",
+                icon = Icons.Default.Security,
+                trailing = {
+                    StatusPill(rootAuth.status.name, rootTone, showDot = true)
+                }
+            ) {
+                Text(
+                    buildString {
+                        append("su=${rootAuth.suBinaryPath ?: "未检测到"}")
+                        if (rootAuth.suManagerHint.isNotBlank()) append(" · ${rootAuth.suManagerHint}")
+                        if (rootAuth.uidOutput.isNotBlank()) append("\n${rootAuth.uidOutput}")
+                        if (rootAuth.selinuxMode.isNotBlank()) append(" · SELinux=${rootAuth.selinuxMode}")
+                        if (!rootAuth.lastError.isNullOrBlank()) append("\n${rootAuth.lastError}")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                if (rootAuthorizing) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Button(
+                        enabled = !rootAuthorizing,
+                        onClick = { vm.requestRootAuthorization() }
+                    ) { Text(if (rootAuthorizing) "等待授权弹窗..." else strings.rootGrantAction) }
+
+                    OutlinedButton(
+                        enabled = !rootAuthorizing,
+                        onClick = { vm.probeRootEnvironment() }
+                    ) { Text(strings.rootProbeAction) }
+
+                    OutlinedButton(
+                        onClick = { vm.revokeRootAuthorization() }
+                    ) { Text(strings.rootRevokeAction) }
+
+                    OutlinedButton(
+                        enabled = !labRunning,
+                        onClick = { vm.runBridgeTrialTool("device_root_status") }
+                    ) { Text("调用 device_root_status") }
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = settings.rootPolicyMode == RootPolicyMode.ALLOWLIST_ONLY,
+                        onClick = { vm.setRootPolicyMode(RootPolicyMode.ALLOWLIST_ONLY) },
+                        label = { Text("白名单模式", style = MaterialTheme.typography.labelSmall) }
+                    )
+                    FilterChip(
+                        selected = settings.rootPolicyMode == RootPolicyMode.CUSTOM_WITH_CONFIRM,
+                        onClick = { vm.setRootPolicyMode(RootPolicyMode.CUSTOM_WITH_CONFIRM) },
+                        label = { Text("自定义 + 强制确认", style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+
+                Text("A. 白名单 Root 命令试运行", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                val rootAllowedPresets = listOf(
+                    "id" to listOf("id"),
+                    "getenforce" to listOf("getenforce"),
+                    "uname -a" to listOf("uname", "-a"),
+                    "cat /proc/loadavg" to listOf("cat", "/proc/loadavg"),
+                    "dumpsys thermalservice" to listOf("dumpsys", "thermalservice")
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    for ((label, argv) in rootAllowedPresets) {
+                        Button(
+                            enabled = !labRunning,
+                            onClick = { dispatchRootExec(argv) }
+                        ) {
+                            Text(label, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                Text("B. Root 安全隔离与灾难拦截验证（应返回 [POLICY_BLOCKED]）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                val rootBlockedPresets = listOf(
+                    "rm -rf /" to listOf("rm", "-rf", "/"),
+                    "cat .../secrets.enc" to listOf("cat", "/data/data/dev.dshn.app/files/security/secrets.enc"),
+                    "sh -c id" to listOf("sh", "-c", "id")
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    for ((label, argv) in rootBlockedPresets) {
+                        OutlinedButton(
+                            enabled = !labRunning,
+                            onClick = { dispatchRootExec(argv) },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text(label, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = customRootArgvDraft,
+                    onValueChange = { customRootArgvDraft = it },
+                    label = { Text("自定义 Root argv（空格分隔）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    when (customRootPreflight) {
+                        is RootCommandPolicy.PolicyDecision.Allowed -> {
+                            StatusPill(
+                                if (customRootPreflight.requiresMandatoryConfirmation) "预检: ALLOWED (强制确认)" else "预检: ALLOWED",
+                                PillTone.SUCCESS,
+                                showDot = true
+                            )
+                        }
+                        is RootCommandPolicy.PolicyDecision.Blocked -> {
+                            StatusPill("预检: BLOCKED", PillTone.ERROR, showDot = true)
+                        }
+                    }
+                    Button(
+                        enabled = !labRunning && parsedCustomRootArgv.isNotEmpty(),
+                        onClick = { dispatchRootExec(parsedCustomRootArgv) }
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("运行 Root 命令", maxLines = 1)
+                    }
+                }
+                if (customRootPreflight is RootCommandPolicy.PolicyDecision.Blocked) {
+                    Text(
+                        customRootPreflight.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         }

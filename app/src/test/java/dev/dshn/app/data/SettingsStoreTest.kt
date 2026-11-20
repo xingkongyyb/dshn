@@ -1,5 +1,6 @@
 package dev.dshn.app.data
 
+import dev.dshn.app.security.RootPolicyMode
 import dev.dshn.app.security.SecretCipher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,10 @@ class SettingsStoreTest {
         assertFalse(defaults.allowAccessibilityRead)
         assertFalse(defaults.allowAccessibilityControl)
         assertFalse(defaults.allowAdbBridge)
+        assertFalse(defaults.allowRootBridge)
+        assertEquals(RootPolicyMode.ALLOWLIST_ONLY, defaults.rootPolicyMode)
+        assertEquals(30, defaults.rootSessionTtlMinutes)
+        assertEquals("deepseek-flash", defaults.selectedModel)
         assertTrue(defaults.requirePerCallConfirmation)
         assertEquals(AppThemeMode.LIGHT, defaults.themeMode)
         assertFalse(store.hasApiKey.value)
@@ -55,5 +60,33 @@ class SettingsStoreTest {
         reloadedDark.update { it.copy(themeMode = AppThemeMode.SYSTEM) }
         val reloadedSystem = SettingsStore(filesDir, xorCipher)
         assertEquals(AppThemeMode.SYSTEM, reloadedSystem.current().themeMode)
+    }
+
+    @Test
+    fun setupWizardProgressPersistsAcrossReloads() {
+        val filesDir = tmp.newFolder("files-wizard")
+        val store = SettingsStore(filesDir, xorCipher)
+        assertFalse(store.current().setupWizardStarted)
+        assertEquals(0, store.current().setupWizardStep)
+
+        store.update { it.copy(setupWizardStarted = true, setupWizardStep = 3) }
+        val reloaded = SettingsStore(filesDir, xorCipher)
+        assertTrue(reloaded.current().setupWizardStarted)
+        assertEquals(3, reloaded.current().setupWizardStep)
+        assertFalse(reloaded.current().onboardingCompleted)
+    }
+
+    @Test
+    fun setApiKeyFailureDoesNotWritePlaintextContainerCopy() {
+        val filesDir = tmp.newFolder("files-fail-cipher")
+        val failingCipher = object : SecretCipher {
+            override fun encrypt(plaintext: ByteArray): ByteArray = throw IllegalStateException("Keystore invalidated")
+            override fun decrypt(ciphertext: ByteArray): ByteArray = throw IllegalStateException("Keystore invalidated")
+        }
+        val store = SettingsStore(filesDir, failingCipher)
+        val res = runCatching { store.setApiKey("sk-secret-value") }
+        assertTrue(res.isFailure)
+        assertFalse(store.hasApiKey.value)
+        assertFalse(File(filesDir, "linux/ubuntu/root/.dsh/api_key").exists())
     }
 }

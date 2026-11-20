@@ -32,7 +32,9 @@ class DeviceBridgeAndAuditTest {
                 "device_swipe",
                 "device_input",
                 "device_global_action",
-                "device_adb_exec"
+                "device_adb_exec",
+                "device_root_status",
+                "device_root_exec"
             ),
             names
         )

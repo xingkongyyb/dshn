@@ -9,10 +9,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -33,7 +38,9 @@ sealed interface SessionUpdate {
     data class AgentMessageChunk(
         override val sessionId: String,
         val messageId: String?,
-        val text: String
+        val text: String,
+        val imageMimeType: String? = null,
+        val imageBase64: String? = null
     ) : SessionUpdate
 
     data class AgentThoughtChunk(
@@ -131,6 +138,23 @@ data class NewSessionResult(
     val rawConfigOptions: JsonElement?
 )
 
+data class AcpAgentCapabilities(
+    val agentName: String = "",
+    val agentVersion: String = "",
+    val imagePrompt: Boolean = false,
+    val audioPrompt: Boolean = false,
+    val httpMcp: Boolean = false,
+    val sessionClose: Boolean = false,
+    val sessionList: Boolean = false,
+    val sessionResume: Boolean = false
+)
+
+sealed interface PromptBlock {
+    data class Text(val text: String) : PromptBlock
+    data class Image(val mimeType: String, val base64Data: String) : PromptBlock
+    data class ResourceLink(val name: String, val uri: String) : PromptBlock
+}
+
 data class PromptResult(val stopReason: String?)
 
 /**
@@ -155,6 +179,8 @@ class AcpClient(
     @Volatile var totalBadLines: Int = 0
         private set
     @Volatile var isClosed: Boolean = false
+        private set
+    @Volatile var agentCapabilities: AcpAgentCapabilities = AcpAgentCapabilities()
         private set
 
     init {
@@ -218,16 +244,32 @@ class AcpClient(
 
     private fun parseUpdate(sessionId: String, u: JsonObject): SessionUpdate {
         val type = u["sessionUpdate"]?.jsonPrimitive?.content
-        val contentText = u["content"]?.jsonObject?.get("text")?.jsonPrimitive?.content
+        val contentObj = runCatching { u["content"]?.jsonObject }.getOrNull()
+        val contentType = contentObj?.get("type")?.jsonPrimitive?.contentOrNull
+        val contentText = contentObj?.get("text")?.jsonPrimitive?.contentOrNull
         return when (type) {
-            "agent_message_chunk" -> SessionUpdate.AgentMessageChunk(
-                sessionId = sessionId,
-                messageId = u["messageId"]?.jsonPrimitive?.content,
-                text = contentText ?: ""
-            )
+            "agent_message_chunk" -> {
+                if (contentType == "image") {
+                    val mime = contentObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/png"
+                    val data = contentObj["data"]?.jsonPrimitive?.contentOrNull
+                    SessionUpdate.AgentMessageChunk(
+                        sessionId = sessionId,
+                        messageId = u["messageId"]?.jsonPrimitive?.contentOrNull,
+                        text = "[Image: $mime]",
+                        imageMimeType = mime,
+                        imageBase64 = data
+                    )
+                } else {
+                    SessionUpdate.AgentMessageChunk(
+                        sessionId = sessionId,
+                        messageId = u["messageId"]?.jsonPrimitive?.contentOrNull,
+                        text = contentText ?: ""
+                    )
+                }
+            }
             "agent_thought_chunk" -> SessionUpdate.AgentThoughtChunk(
                 sessionId = sessionId,
-                messageId = u["messageId"]?.jsonPrimitive?.content,
+                messageId = u["messageId"]?.jsonPrimitive?.contentOrNull,
                 text = contentText ?: ""
             )
             "tool_call" -> SessionUpdate.ToolCall(
@@ -320,8 +362,11 @@ class AcpClient(
             throw AcpException("ACP write failed: ${t.message}")
         }
         val resp = withTimeout(timeoutMs) { deferred.await() }
-        resp["error"]?.let {
-            throw AcpException(it.jsonObject["message"]?.jsonPrimitive?.content ?: "ACP error")
+        resp["error"]?.let { errEl ->
+            val errObj = errEl.jsonObject
+            val msg = errObj["message"]?.jsonPrimitive?.contentOrNull ?: "ACP error"
+            val code = errObj["code"]?.jsonPrimitive?.intOrNull
+            throw AcpException(msg, code)
         }
         return resp["result"]?.jsonObject ?: buildJsonObject {}
     }
@@ -335,14 +380,18 @@ class AcpClient(
         })
     }
 
-    suspend fun initialize(timeoutMs: Long = 60_000): JsonObject = request(
-        "initialize",
-        buildJsonObject {
-            put("protocolVersion", 1)
-            put("clientCapabilities", buildJsonObject {})
-        },
-        timeoutMs = timeoutMs
-    )
+    suspend fun initialize(timeoutMs: Long = 60_000): JsonObject {
+        val result = request(
+            "initialize",
+            buildJsonObject {
+                put("protocolVersion", 1)
+                put("clientCapabilities", buildJsonObject {})
+            },
+            timeoutMs = timeoutMs
+        )
+        agentCapabilities = parseAgentCapabilities(result)
+        return result
+    }
 
     suspend fun newSession(cwd: String, mcpServers: List<McpServerConfig> = emptyList()): NewSessionResult {
         val r = request("session/new", buildJsonObject {
@@ -379,17 +428,34 @@ class AcpClient(
         )
     }
 
-    suspend fun prompt(sessionId: String, text: String): PromptResult {
+    suspend fun prompt(sessionId: String, text: String): PromptResult =
+        prompt(sessionId, listOf(PromptBlock.Text(text)))
+
+    suspend fun prompt(sessionId: String, blocks: List<PromptBlock>): PromptResult {
         val r = request("session/prompt", buildJsonObject {
             put("sessionId", sessionId)
             putJsonArray("prompt") {
-                add(buildJsonObject {
-                    put("type", "text")
-                    put("text", text)
-                })
+                for (b in blocks) {
+                    when (b) {
+                        is PromptBlock.Text -> add(buildJsonObject {
+                            put("type", "text")
+                            put("text", b.text)
+                        })
+                        is PromptBlock.Image -> add(buildJsonObject {
+                            put("type", "image")
+                            put("mimeType", b.mimeType)
+                            put("data", b.base64Data)
+                        })
+                        is PromptBlock.ResourceLink -> add(buildJsonObject {
+                            put("type", "resource_link")
+                            put("name", b.name)
+                            put("uri", b.uri)
+                        })
+                    }
+                }
             }
         }, timeoutMs = 600_000)
-        return PromptResult(r["stopReason"]?.jsonPrimitive?.content)
+        return PromptResult(r["stopReason"]?.jsonPrimitive?.contentOrNull)
     }
 
     fun cancel(sessionId: String) = notify("session/cancel", buildJsonObject { put("sessionId", sessionId) })
@@ -423,6 +489,56 @@ class AcpClient(
 
     companion object {
         const val BAD_LINE_DEGRADED_THRESHOLD = 3
+
+        fun parseAgentCapabilities(initResult: JsonObject): AcpAgentCapabilities {
+            val info = runCatching { initResult["agentInfo"]?.jsonObject }.getOrNull()
+            val caps = runCatching { initResult["agentCapabilities"]?.jsonObject }.getOrNull()
+            val promptCaps = runCatching { caps?.get("promptCapabilities")?.jsonObject }.getOrNull()
+            val mcpCaps = runCatching { caps?.get("mcpCapabilities")?.jsonObject }.getOrNull()
+            val sessCaps = runCatching { caps?.get("sessionCapabilities")?.jsonObject }.getOrNull()
+            return AcpAgentCapabilities(
+                agentName = info?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                agentVersion = info?.get("version")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                imagePrompt = promptCaps?.get("image")?.jsonPrimitive?.booleanOrNull == true,
+                audioPrompt = promptCaps?.get("audio")?.jsonPrimitive?.booleanOrNull == true,
+                httpMcp = mcpCaps?.get("http")?.jsonPrimitive?.booleanOrNull == true,
+                sessionClose = sessCaps?.containsKey("close") == true,
+                sessionList = sessCaps?.containsKey("list") == true,
+                sessionResume = sessCaps?.containsKey("resume") == true
+            )
+        }
+
+        /**
+         * Extracts human-readable text from ACP `tool_call_update.content` payloads
+         * (`[{"type":"content","content":{"type":"text","text":"..."}}]`).
+         */
+        fun extractToolUpdateContentText(elem: JsonElement?): String {
+            if (elem == null) return ""
+            return when (elem) {
+                is JsonPrimitive -> elem.contentOrNull.orEmpty()
+                is JsonArray -> elem.mapNotNull { item ->
+                    when (item) {
+                        is JsonPrimitive -> item.contentOrNull
+                        is JsonObject -> {
+                            val inner = runCatching { item["content"]?.jsonObject }.getOrNull()
+                            when (inner?.get("type")?.jsonPrimitive?.contentOrNull) {
+                                "text" -> inner["text"]?.jsonPrimitive?.contentOrNull
+                                "image" -> "[Image: ${inner["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image"}]"
+                                else -> item["text"]?.jsonPrimitive?.contentOrNull ?: item.toString()
+                            }
+                        }
+                        else -> item.toString()
+                    }
+                }.filter { it.isNotEmpty() }.joinToString("\n")
+                is JsonObject -> elem["text"]?.jsonPrimitive?.contentOrNull ?: elem.toString()
+            }
+        }
+
+        fun isContentRefusedMessage(message: String?): Boolean {
+            if (message.isNullOrBlank()) return false
+            return message.contains("CONTENT_REFUSED", ignoreCase = true) ||
+                message.contains("content safety review", ignoreCase = true)
+        }
 
         fun encodeMcpServer(server: McpServerConfig): JsonObject = when (server) {
             is McpServerConfig.Stdio -> buildJsonObject {
@@ -500,4 +616,8 @@ class AcpClient(
     }
 }
 
-class AcpException(message: String) : Exception(message)
+class AcpException(
+    message: String,
+    val code: Int? = null,
+    val isContentRefused: Boolean = AcpClient.isContentRefusedMessage(message)
+) : Exception(message)

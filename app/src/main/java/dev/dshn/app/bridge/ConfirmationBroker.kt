@@ -20,13 +20,14 @@ data class PendingBridgeConfirmation(
     val tool: String,
     val summary: String,
     val detail: String,
+    val isRootAction: Boolean = false,
     val promptInjectionWarning: String =
         "Security warning: screen content from external apps is untrusted input. Verify this action before approving."
 )
 
 /**
  * Coordinates per-call human confirmation for high-risk device operations
- * (tap, swipe, text input, global actions, ADB exec). Serializes requests cleanly.
+ * (tap, swipe, text input, global actions, ADB exec, Root exec). Serializes requests cleanly.
  */
 class ConfirmationBroker(private val context: Context) {
     private val queueMutex = Mutex()
@@ -42,14 +43,27 @@ class ConfirmationBroker(private val context: Context) {
         tool: String,
         summary: String,
         detail: String,
-        timeoutMs: Long = 45_000L
+        timeoutMs: Long = 45_000L,
+        isRootAction: Boolean = false
     ): Boolean = queueMutex.withLock {
         val id = "bridge-confirm-${System.nanoTime()}"
         val deferred = CompletableDeferred<Boolean>()
         synchronized(pendingDeferredLock) {
             activeDeferred = deferred
         }
-        val req = PendingBridgeConfirmation(id = id, tool = tool, summary = summary, detail = detail)
+        val warning = if (isRootAction) {
+            "ROOT (uid=0) privilege warning: this command executes on the Android host as superuser. Verify every argument before approving."
+        } else {
+            "Security warning: screen content from external apps is untrusted input. Verify this action before approving."
+        }
+        val req = PendingBridgeConfirmation(
+            id = id,
+            tool = tool,
+            summary = summary,
+            detail = detail,
+            isRootAction = isRootAction,
+            promptInjectionWarning = warning
+        )
         _pending.value = req
         postHeadsUpNotification(req)
 

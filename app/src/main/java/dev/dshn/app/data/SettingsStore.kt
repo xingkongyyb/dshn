@@ -2,6 +2,7 @@ package dev.dshn.app.data
 
 import android.content.Context
 import dev.dshn.app.security.KeystoreCrypto
+import dev.dshn.app.security.RootPolicyMode
 import dev.dshn.app.security.SecretCipher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,13 +31,17 @@ enum class AdbTransportMode { AUTO, PLAIN_TCP, TLS }
 @Serializable
 data class AppSettings(
     val permissionMode: PermissionTier = PermissionTier.WORKSPACE_WRITE,
-    val selectedModel: String = "deepseek-v4-flash",
+    val selectedModel: String = "deepseek-flash",
     val reasoningEffort: String = "medium",
     val extraWorkspaceBindHostPath: String? = null,
     val bridgeEnabled: Boolean = false,
     val allowAccessibilityRead: Boolean = false,
     val allowAccessibilityControl: Boolean = false,
     val allowAdbBridge: Boolean = false,
+    val allowRootBridge: Boolean = false,
+    val rootPolicyMode: RootPolicyMode = RootPolicyMode.ALLOWLIST_ONLY,
+    val rootSessionTtlMinutes: Int = 30,
+    val customSuBinaryPath: String? = null,
     val requirePerCallConfirmation: Boolean = true,
     val wakeLockDuringTurn: Boolean = true,
     val autoRestartRuntime: Boolean = true,
@@ -44,7 +49,18 @@ data class AppSettings(
     val localeMode: AppLocaleMode = AppLocaleMode.SYSTEM,
     val selectedSessionId: String? = null,
     val lastAdbEndpoint: String? = null,
-    val adbTransportMode: AdbTransportMode = AdbTransportMode.AUTO
+    val adbTransportMode: AdbTransportMode = AdbTransportMode.AUTO,
+    val deepseekBaseUrl: String? = null,
+    val deepseekSearchBaseUrl: String? = null,
+    val webSearchProvider: String = "",
+    /** Set once the first-run setup wizard has been finished or skipped. */
+    val onboardingCompleted: Boolean = false,
+    /** Set once the user advances through the first-run setup wizard so process death mid-wizard does not skip remaining steps. */
+    val setupWizardStarted: Boolean = false,
+    /** Last visited step index inside the first-run setup wizard. */
+    val setupWizardStep: Int = 0,
+    /** Container working directory used for new chats. */
+    val defaultCwd: String = "/root"
 )
 
 /**
@@ -112,7 +128,10 @@ class SettingsStore(
     }
 
     fun ensureContainerApiKeySynced() {
-        if (containerApiKeyFile.exists() && containerApiKeyFile.readText().isNotBlank()) {
+        val existing = runCatching {
+            if (containerApiKeyFile.exists()) containerApiKeyFile.readText() else ""
+        }.getOrDefault("")
+        if (existing.isNotBlank()) {
             setOwnerOnlyPermissions(containerApiKeyFile)
             return
         }

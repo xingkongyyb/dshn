@@ -59,7 +59,7 @@ class AcpClientTest {
                     val req1 = json.parseToJsonElement(br.readLine()).jsonObject
                     assertEquals("initialize", req1["method"]?.jsonPrimitive?.content)
                     serverOutPipe.write(
-                        """{"jsonrpc":"2.0","id":${req1["id"]},"result":{"protocolVersion":1}}"""
+                        """{"jsonrpc":"2.0","id":${req1["id"]},"result":{"protocolVersion":1,"agentInfo":{"name":"deepseek-harness-acp","version":"0.0.1"},"agentCapabilities":{"mcpCapabilities":{"http":true},"promptCapabilities":{"image":true,"audio":false},"sessionCapabilities":{"close":{},"list":{},"resume":{}}}}}"""
                             .plus("\n").toByteArray()
                     )
                     serverOutPipe.flush()
@@ -96,6 +96,14 @@ class AcpClientTest {
 
             val initRes = client.initialize()
             assertEquals("1", initRes["protocolVersion"]?.jsonPrimitive?.content)
+            assertTrue(client.agentCapabilities.imagePrompt)
+            assertTrue(client.agentCapabilities.httpMcp)
+            assertTrue(client.agentCapabilities.sessionResume)
+            assertTrue(AcpClient.isContentRefusedMessage("turn failed: CONTENT_REFUSED"))
+            val toolText = AcpClient.extractToolUpdateContentText(
+                json.parseToJsonElement("""[{"type":"content","content":{"type":"text","text":"hello tool"}}]""")
+            )
+            assertEquals("hello tool", toolText)
 
             val sessRes = client.newSession(
                 cwd = "/root",

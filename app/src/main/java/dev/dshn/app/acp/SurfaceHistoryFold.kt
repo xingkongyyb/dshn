@@ -40,6 +40,18 @@ object SurfaceHistoryFold {
     fun foldEvents(events: JsonArray): List<HistoryTurn> {
         val turns = mutableListOf<HistoryTurn>()
         val toolIndex = mutableMapOf<String, Pair<Int, Int>>() // toolCallId -> (turnIdx, toolIdx)
+        val seenIds = HashSet<String>()
+
+        fun uniqueTurnId(base: String): String {
+            if (seenIds.add(base)) return base
+            var suffix = turns.size
+            var candidate = "$base-$suffix"
+            while (!seenIds.add(candidate)) {
+                suffix++
+                candidate = "$base-$suffix"
+            }
+            return candidate
+        }
 
         for (elem in events) {
             val ev = runCatching { elem.jsonObject }.getOrNull() ?: continue
@@ -52,13 +64,14 @@ object SurfaceHistoryFold {
                     val sourceKind = runCatching { data["source"]?.jsonObject }
                         .getOrNull()?.get("kind")?.jsonPrimitive?.contentOrNull
                     // DSH injects synthetic runtime-context snapshots under user/message with source.kind != "user".
-                    if (sourceKind != null && sourceKind != "user") {
+                    // DSH 0.2.2-rc.5 also adds "retry" (retry-rpc) as a user-originated turn retry.
+                    if (sourceKind != null && sourceKind != "user" && sourceKind != "retry") {
                         continue
                     }
                     val contentText = extractContentText(data["content"])
                     if (contentText.isNotEmpty()) {
                         turns += HistoryTurn(
-                            id = "hist-user-$seq",
+                            id = uniqueTurnId("hist-user-$seq"),
                             role = "user",
                             seq = seq,
                             text = contentText
@@ -85,6 +98,14 @@ object SurfaceHistoryFold {
                                     val t = block["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                                     if (t.isNotEmpty()) textBuf.append(t)
                                 }
+                                "image" -> {
+                                    val mime = runCatching { block["attachment"]?.jsonObject }
+                                        .getOrNull()?.get("mediaType")?.jsonPrimitive?.contentOrNull
+                                        ?: block["mimeType"]?.jsonPrimitive?.contentOrNull
+                                        ?: "image"
+                                    if (textBuf.isNotEmpty()) textBuf.append("\n")
+                                    textBuf.append("[Image: $mime]")
+                                }
                                 "tool-call", "tool_call" -> {
                                     val callId = block["id"]?.jsonPrimitive?.contentOrNull
                                         ?: block["toolCallId"]?.jsonPrimitive?.contentOrNull
@@ -106,7 +127,7 @@ object SurfaceHistoryFold {
                         }
                         val turnIdx = turns.size
                         turns += HistoryTurn(
-                            id = "hist-assistant-$seq",
+                            id = uniqueTurnId("hist-assistant-$seq"),
                             role = "assistant",
                             seq = seq,
                             text = textBuf.toString(),
@@ -120,7 +141,7 @@ object SurfaceHistoryFold {
                         val fallbackText = extractContentText(msgObj["content"])
                         if (fallbackText.isNotEmpty()) {
                             turns += HistoryTurn(
-                                id = "hist-assistant-$seq",
+                                id = uniqueTurnId("hist-assistant-$seq"),
                                 role = "assistant",
                                 seq = seq,
                                 text = fallbackText
@@ -158,7 +179,7 @@ object SurfaceHistoryFold {
                         )
                     } else if (outcomeUnknown) {
                         turns += HistoryTurn(
-                            id = "hist-system-$seq",
+                            id = uniqueTurnId("hist-system-$seq"),
                             role = "system",
                             seq = seq,
                             text = "Tool execution outcome unknown after interruption ($callId).",
@@ -171,11 +192,28 @@ object SurfaceHistoryFold {
                     val text = data["text"]?.jsonPrimitive?.contentOrNull
                     if (!text.isNullOrBlank()) {
                         turns += HistoryTurn(
-                            id = "hist-cmd-$seq",
+                            id = uniqueTurnId("hist-cmd-$seq"),
                             role = "system",
                             seq = seq,
                             text = text
                         )
+                    }
+                }
+
+                "turn/end" -> {
+                    val reasonObj = runCatching { data["reason"]?.jsonObject }.getOrNull()
+                    if (reasonObj?.get("kind")?.jsonPrimitive?.contentOrNull == "error") {
+                        val errObj = runCatching { reasonObj["error"]?.jsonObject }.getOrNull()
+                        val code = errObj?.get("code")?.jsonPrimitive?.contentOrNull.orEmpty()
+                        val msg = errObj?.get("message")?.jsonPrimitive?.contentOrNull.orEmpty()
+                        if (code == "CONTENT_REFUSED" || AcpClient.isContentRefusedMessage(msg)) {
+                            turns += HistoryTurn(
+                                id = uniqueTurnId("hist-refusal-$seq"),
+                                role = "system",
+                                seq = seq,
+                                text = "[CONTENT_REFUSED] ${msg.ifBlank { "The model provider refused to answer under its content safety review." }}"
+                            )
+                        }
                     }
                 }
             }
@@ -190,13 +228,33 @@ object SurfaceHistoryFold {
             is JsonArray -> elem.joinToString("\n") { item ->
                 when (item) {
                     is JsonPrimitive -> item.contentOrNull.orEmpty()
-                    is JsonObject -> item["text"]?.jsonPrimitive?.contentOrNull
-                        ?: item["content"]?.let { extractContentText(it) }
-                        ?: item.toString()
+                    is JsonObject -> {
+                        if (item["type"]?.jsonPrimitive?.contentOrNull == "image") {
+                            val mime = runCatching { item["attachment"]?.jsonObject }
+                                .getOrNull()?.get("mediaType")?.jsonPrimitive?.contentOrNull
+                                ?: item["mimeType"]?.jsonPrimitive?.contentOrNull
+                                ?: "image"
+                            "[Image: $mime]"
+                        } else {
+                            item["text"]?.jsonPrimitive?.contentOrNull
+                                ?: item["content"]?.let { extractContentText(it) }
+                                ?: item.toString()
+                        }
+                    }
                     else -> item.toString()
                 }
             }
-            is JsonObject -> elem["text"]?.jsonPrimitive?.contentOrNull ?: elem.toString()
+            is JsonObject -> {
+                if (elem["type"]?.jsonPrimitive?.contentOrNull == "image") {
+                    val mime = runCatching { elem["attachment"]?.jsonObject }
+                        .getOrNull()?.get("mediaType")?.jsonPrimitive?.contentOrNull
+                        ?: elem["mimeType"]?.jsonPrimitive?.contentOrNull
+                        ?: "image"
+                    "[Image: $mime]"
+                } else {
+                    elem["text"]?.jsonPrimitive?.contentOrNull ?: elem.toString()
+                }
+            }
         }
     }
 }

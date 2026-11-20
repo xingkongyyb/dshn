@@ -1,0 +1,47 @@
+{
+    "schemaVersion":  1,
+    "bundleVersion":  "0.3.1-u24.04.5-n24.22.3-dsh0.2.2-rc.5-acp-glibc",
+    "ubuntuVersion":  "24.04.5",
+    "nodeVersion":  "v24.22.3",
+    "dshVersion":  "0.2.2-rc.5",
+    "minFreeSpaceMb":  600,
+    "caCertAssetPath":  "env/ca-certificates.crt",
+    "archives":  [
+                     {
+                         "id":  "ubuntu",
+                         "labelZh":  "Ubuntu 24.04.5 基础系统",
+                         "labelEn":  "Ubuntu 24.04.5 base rootfs",
+                         "assetPath":  "env/ubuntu-base-24.04.5-base-arm64.tgz.bin",
+                         "targetSubdir":  "",
+                         "stripComponents":  0,
+                         "sizeBytes":  29936675,
+                         "sha256":  "a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2"
+                     },
+                     {
+                         "id":  "node",
+                         "labelZh":  "Node.js v24.22.3 (arm64)",
+                         "labelEn":  "Node.js v24.22.3 (arm64)",
+                         "assetPath":  "env/node-v24.22.3-linux-arm64.tgz.bin",
+                         "targetSubdir":  "opt/node24",
+                         "stripComponents":  1,
+                         "sizeBytes":  58051304,
+                         "sha256":  "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8"
+                     },
+                     {
+                         "id":  "dsh",
+                         "labelZh":  "DeepSeek Harness 0.2.2-rc.5 (ACP 精简版)",
+                         "labelEn":  "DeepSeek Harness 0.2.2-rc.5 (ACP slim)",
+                         "assetPath":  "env/dsh-0.2.2-rc.5-linux-arm64.tgz.bin",
+                         "targetSubdir":  "opt/node24/lib/node_modules/@deepseek-ai/dsh",
+                         "stripComponents":  0,
+                         "sizeBytes":  32233018,
+                         "sha256":  "54c9cb4a8603e1b3d67fd09c0003f5a2b220b56633780a12c6902eb1ae891a40"
+                     }
+                 ],
+    "symlinks":  [
+                     {
+                         "linkPath":  "opt/node24/bin/dsh",
+                         "target":  "../lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+                     }
+                 ]
+}

@@ -74,4 +74,41 @@ class SurfaceHistoryFoldTest {
         assertEquals("assistant", turns[1].role)
         assertEquals("DSHN_E2E_O", turns[1].text)
     }
+
+    @Test
+    fun foldsRetrySourceImageBlocksAndContentRefusedTurnEnd() {
+        val eventsJson = """
+        [
+          {"seq": 1, "type": "user/message", "data": {"source": {"kind": "retry"}, "content": [{"type": "text", "text": "Analyze image"}, {"type": "image", "attachment": {"mediaType": "image/png"}}]}},
+          {"seq": 2, "type": "turn/end", "data": {"turn": 1, "reason": {"kind": "error", "error": {"code": "CONTENT_REFUSED", "message": "DeepSeek refused to answer under its content safety review"}}}}
+        ]
+        """.trimIndent()
+
+        val turns = SurfaceHistoryFold.foldEvents(json.parseToJsonElement(eventsJson).jsonArray)
+        assertEquals(2, turns.size)
+        assertEquals("user", turns[0].role)
+        assertTrue(turns[0].text.contains("Analyze image"))
+        assertTrue(turns[0].text.contains("[Image: image/png]"))
+        assertEquals("system", turns[1].role)
+        assertTrue(turns[1].text.contains("[CONTENT_REFUSED]"))
+    }
+
+    @Test
+    fun assignsUniqueIdsWhenSeqMissingOrDuplicated() {
+        val eventsJson = """
+        [
+          {"type": "user/message", "data": {"content": "First missing seq"}},
+          {"type": "assistant/message", "data": {"message": {"content": [{"type": "text", "text": "Reply 1"}]}}},
+          {"seq": "bad", "type": "user/message", "data": {"content": "Second unparseable seq"}},
+          {"seq": 0, "type": "assistant/message", "data": {"message": {"content": [{"type": "text", "text": "Reply 2"}]}}},
+          {"seq": 5, "type": "command/done", "data": {"text": "cmd 1"}},
+          {"seq": 5, "type": "command/done", "data": {"text": "cmd 2"}}
+        ]
+        """.trimIndent()
+
+        val turns = SurfaceHistoryFold.foldEvents(json.parseToJsonElement(eventsJson).jsonArray)
+        assertEquals(6, turns.size)
+        val uniqueIds = turns.map { it.id }.toSet()
+        assertEquals(turns.size, uniqueIds.size)
+    }
 }

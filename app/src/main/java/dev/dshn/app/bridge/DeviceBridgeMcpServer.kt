@@ -20,6 +20,7 @@ import android.view.WindowManager
 import dev.dshn.app.data.SettingsStore
 import dev.dshn.app.security.AdbArgvPolicy
 import dev.dshn.app.security.AuditLogger
+import dev.dshn.app.security.RootCommandPolicy
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +64,8 @@ class DeviceBridgeMcpServer(
     private val settingsStore: SettingsStore,
     private val auditLogger: AuditLogger,
     val confirmationBroker: ConfirmationBroker,
-    val adbClient: WirelessAdbClient
+    val adbClient: WirelessAdbClient,
+    val rootAuthManager: RootAuthManager
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val rootFilesDir = File(context.filesDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"))
@@ -178,7 +180,7 @@ class DeviceBridgeMcpServer(
             })
             put("serverInfo", buildJsonObject {
                 put("name", "dshn-device-bridge")
-                put("version", "0.1.0")
+                put("version", "0.2.0")
             })
         }
         "ping" -> buildJsonObject {}
@@ -198,8 +200,8 @@ class DeviceBridgeMcpServer(
 
         return when (tool) {
             "device_info" -> {
-                if (!settings.allowAccessibilityRead && !settings.allowAdbBridge) {
-                    return blockedResult(tool, "Enable Device Read or ADB Bridge in Settings to query device info.")
+                if (!settings.allowAccessibilityRead && !settings.allowAdbBridge && !settings.allowRootBridge) {
+                    return blockedResult(tool, "Enable Device Read, ADB Bridge, or Root Bridge in Settings to query device info.")
                 }
                 auditLogger.log("device_bridge", tool, "auto_allowed", "Read device info")
                 textResult(buildDeviceInfoJson())
@@ -377,6 +379,95 @@ class DeviceBridgeMcpServer(
                 }
             }
 
+            "device_root_status" -> {
+                if (!settings.allowRootBridge) {
+                    return blockedResult(tool, "Root Bridge toggle is OFF in Settings.")
+                }
+                val st = rootAuthManager.probeEnvironment(settings.customSuBinaryPath)
+                val active = rootAuthManager.isAuthorized(settings.rootSessionTtlMinutes)
+                auditLogger.log("root", tool, "auto_allowed", "Read root authorization status (authorized=$active)")
+                textResult(
+                    buildJsonObject {
+                        put("status", st.status.name)
+                        put("authorized", active)
+                        put("suDetected", st.suBinaryPath != null)
+                        put("suBinaryPath", st.suBinaryPath ?: "")
+                        put("suManagerHint", st.suManagerHint)
+                        put("suVersion", st.suVersion)
+                        put("selinuxMode", st.selinuxMode)
+                        put("policyMode", settings.rootPolicyMode.name)
+                        put("sessionTtlMinutes", settings.rootSessionTtlMinutes)
+                    }.toString()
+                )
+            }
+
+            "device_root_exec" -> {
+                if (!settings.allowRootBridge) {
+                    return blockedResult(tool, "Root Bridge toggle is OFF in Settings.")
+                }
+                if (!rootAuthManager.isAuthorized(settings.rootSessionTtlMinutes)) {
+                    auditLogger.log("root", tool, "unauthorized", "Root command blocked: user has not authorized root")
+                    return textResult(
+                        "[ROOT_UNAUTHORIZED] Root access is not currently authorized in DSHN. Ask the user to grant root in Settings or Device Lab.",
+                        isError = true
+                    )
+                }
+                val rawArgv = runCatching { args["argv"]?.jsonArray }.getOrNull()
+                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                    ?: return textResult("[INVALID_ARGS] argv array of strings is required", isError = true)
+                val timeoutSec = args["timeout_sec"]?.jsonPrimitive?.longOrNull?.coerceIn(2L, 120L) ?: 30L
+
+                when (val policy = RootCommandPolicy.evaluate(rawArgv, settings.rootPolicyMode)) {
+                    is RootCommandPolicy.PolicyDecision.Blocked -> {
+                        auditLogger.log("root", tool, "policy_blocked", rawArgv.joinToString(" "), policy.reason)
+                        return textResult(policy.reason, isError = true)
+                    }
+                    is RootCommandPolicy.PolicyDecision.Allowed -> {
+                        val summary = "ROOT (uid=0): ${rawArgv.joinToString(" ")}"
+                        val mustConfirm = policy.requiresMandatoryConfirmation || settings.requirePerCallConfirmation
+                        if (mustConfirm) {
+                            val approved = confirmationBroker.requestConfirmation(
+                                tool = tool,
+                                summary = summary,
+                                detail = "Policy: ${settings.rootPolicyMode.name}\nCommand: ${policy.shellCommand}\nTimeout: ${timeoutSec}s",
+                                isRootAction = true
+                            )
+                            if (!approved) {
+                                return deniedResult(tool, summary)
+                            }
+                        }
+                        val exec = runCatching {
+                            rootAuthManager.executeAllowed(
+                                allowed = policy,
+                                timeoutSec = timeoutSec,
+                                ttlMinutes = settings.rootSessionTtlMinutes
+                            )
+                        }.getOrElse { err ->
+                            val msg = err.message ?: err.javaClass.simpleName
+                            auditLogger.log("root", tool, "error", summary, msg)
+                            return textResult(msg, isError = true)
+                        }
+                        auditLogger.log(
+                            "root",
+                            tool,
+                            if (mustConfirm) "allowed_once" else "auto_allowed",
+                            summary,
+                            "exit=${exec.exitCode} timedOut=${exec.timedOut} outLen=${exec.stdout.length}"
+                        )
+                        textResult(
+                            buildJsonObject {
+                                put("exitCode", exec.exitCode)
+                                put("stdout", exec.stdout)
+                                put("stderr", exec.stderr)
+                                put("durationMs", exec.durationMs)
+                                put("timedOut", exec.timedOut)
+                            }.toString(),
+                            isError = exec.exitCode != 0 || exec.timedOut
+                        )
+                    }
+                }
+            }
+
             else -> throw IllegalArgumentException("Unknown tool: $tool")
         }
     }
@@ -443,6 +534,8 @@ class DeviceBridgeMcpServer(
             put("densityDpi", densityDpi)
             put("batteryPercent", batteryPct)
             put("accessibilityConnected", DshnAccessibilityService.connected.value)
+            put("rootSuDetected", rootAuthManager.state.value.suBinaryPath != null)
+            put("rootAuthorized", rootAuthManager.isAuthorized(settingsStore.current().rootSessionTtlMinutes))
         }.toString()
     }
 
@@ -519,6 +612,14 @@ class DeviceBridgeMcpServer(
                     })
                     put("host", buildJsonObject { put("type", "string") })
                     put("port", buildJsonObject { put("type", "integer") })
+                },
+                tool("device_root_status", "Read Android host root (`su`) detection, authorization status, SELinux mode, and policy mode.") { },
+                tool("device_root_exec", "Run a policy-checked Android host root (`su`) command via structured argv (requires user root authorization + confirmation).", listOf("argv")) {
+                    put("argv", buildJsonObject {
+                        put("type", "array")
+                        put("items", buildJsonObject { put("type", "string") })
+                    })
+                    put("timeout_sec", buildJsonObject { put("type", "integer") })
                 }
             )
         )

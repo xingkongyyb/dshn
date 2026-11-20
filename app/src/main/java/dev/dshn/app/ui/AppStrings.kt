@@ -43,7 +43,15 @@ data class UiStrings(
     val themeDark: String,
     val themeSystem: String,
     val languageLabel: String,
-    val diagnosticsSection: String
+    val diagnosticsSection: String,
+    val rootSection: String,
+    val rootGrantAction: String,
+    val rootRevokeAction: String,
+    val rootProbeAction: String,
+    val rootPhantomFixAction: String,
+    val terminalModeContainer: String,
+    val terminalModeRoot: String,
+    val dshUpgradeAction: String
 )
 
 object AppStrings {
@@ -87,7 +95,15 @@ object AppStrings {
         themeDark = "Dark",
         themeSystem = "System",
         languageLabel = "Language",
-        diagnosticsSection = "Runtime Logs & Diagnostics"
+        diagnosticsSection = "Runtime Logs & Diagnostics",
+        rootSection = "Root Authorization (su)",
+        rootGrantAction = "Request Root Auth",
+        rootRevokeAction = "Revoke & Lock",
+        rootProbeAction = "Detect su",
+        rootPhantomFixAction = "Apply via Root",
+        terminalModeContainer = "Ubuntu Container",
+        terminalModeRoot = "Host Root (su)",
+        dshUpgradeAction = "Upgrade DSH to 0.2.2-rc.5"
     )
 
     private val ZH = UiStrings(
@@ -130,7 +146,15 @@ object AppStrings {
         themeDark = "深色",
         themeSystem = "跟随系统",
         languageLabel = "界面语言",
-        diagnosticsSection = "运行日志与诊断"
+        diagnosticsSection = "运行日志与诊断",
+        rootSection = "Root 授权管理 (su)",
+        rootGrantAction = "申请 Root 授权",
+        rootRevokeAction = "撤销并锁定",
+        rootProbeAction = "检测 su",
+        rootPhantomFixAction = "Root 一键修复幽灵进程",
+        terminalModeContainer = "Ubuntu 容器",
+        terminalModeRoot = "宿主机 Root (su)",
+        dshUpgradeAction = "升级 DSH 至 0.2.2-rc.5"
     )
 
     fun resolve(mode: AppLocaleMode): UiStrings = when (mode) {

@@ -4,10 +4,29 @@
  * Uses node-pty shipped inside DSH and isolates DSH_HOME from ACP sessions.
  */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import readline from "node:readline";
 
-const NODE_PTY_PATH =
-  "/opt/node24/lib/node_modules/@deepseek-ai/dsh/node_modules/node-pty/lib/index.js";
+const NODE_PTY_CANDIDATES = [
+  "/opt/node24/lib/node_modules/@deepseek-ai/dsh/node_modules/node-pty/lib/index.js",
+  "/opt/node24/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/node_modules/node-pty/lib/index.js",
+  "/opt/node24/lib/node_modules/node-pty/lib/index.js",
+];
+
+async function loadNodePty() {
+  for (const candidate of NODE_PTY_CANDIDATES) {
+    if (fs.existsSync(candidate)) {
+      const mod = await import(candidate);
+      return mod.default || mod;
+    }
+  }
+  const pkgAnchor = "/opt/node24/lib/node_modules/@deepseek-ai/dsh/package.json";
+  if (fs.existsSync(pkgAnchor)) {
+    const req = createRequire(pkgAnchor);
+    return req("node-pty");
+  }
+  throw new Error(`node-pty not found in any expected location: ${NODE_PTY_CANDIDATES.join(", ")}`);
+}
 
 function parseArgs(argv) {
   const opts = { cols: 80, rows: 24, cwd: "/root", shell: "/bin/bash" };
@@ -33,8 +52,7 @@ async function main() {
   const shellBin = fs.existsSync(opts.shell) ? opts.shell : "/bin/sh";
   const shellArgs = shellBin.endsWith("/bash") ? ["-il"] : ["-i"];
 
-  const ptyMod = await import(NODE_PTY_PATH);
-  const pty = ptyMod.default || ptyMod;
+  const pty = await loadNodePty();
 
   const env = {
     ...process.env,

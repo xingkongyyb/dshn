@@ -41,8 +41,12 @@ export function apply(ctx) {
     const agents = ctx.get("agents");
     if (!agents) return undefined;
     if (sessionId) return agents.get(sessionId);
+    const list = agents.list?.() ?? [];
+    // DSH 0.2.2-rc.5+ distinguishes ordinary forked sessions from explicit subagents via header.origin.
+    const ordinary = list.find((a) => a?.session?.header?.origin !== "subagent");
+    if (ordinary) return ordinary;
     const roots = agents.roots?.() ?? [];
-    return roots[0] ?? agents.list?.()?.[0];
+    return roots[0] ?? list[0];
   }
 
   function liveSessionIds() {
@@ -119,6 +123,8 @@ export function apply(ctx) {
             hasSessionQuery: Boolean(ctx.get("sessionQuery")),
             hasCommands: Boolean(ctx.get("commands")),
             hasAgents: Boolean(ctx.get("agents")),
+            hasAttachments: Boolean(ctx.get("attachments")),
+            hasAgentTeam: Boolean(ctx.get("agentTeam")),
             liveCount: liveSessionIds().size,
           });
         }
@@ -187,6 +193,8 @@ export function apply(ctx) {
               createdAt: entry.header.createdAt,
               cwd: entry.header.cwd ?? null,
               parentSession: entry.header.parentSession ?? null,
+              origin: entry.header.origin ?? null,
+              agentPreset: entry.header.agentPreset ?? null,
               isSeeded: Boolean(entry.header.isSeeded),
               delegationDepth: entry.header.delegationDepth ?? 0,
               live: Boolean(entry.live || liveIds.has(sid)),

@@ -64,6 +64,9 @@ class ContainerLauncher(private val context: Context) {
 
     private fun environment(
         permissionMode: String = "workspace-write",
+        deepseekBaseUrl: String? = null,
+        deepseekSearchBaseUrl: String? = null,
+        webSearchProvider: String? = null,
         extraEnv: Map<String, String> = emptyMap()
     ): Map<String, String> = buildMap {
         put("BXROOT_LIB_PATH", File(nativeLibDir, "libbxroot-runtime.so").absolutePath)
@@ -80,12 +83,34 @@ class ContainerLauncher(private val context: Context) {
         put("DSHN_SESSION_BRIDGE_SOCK", "/run/dshn-bridge/session-bridge.sock")
         put("DSHN_DEVICE_MCP_SOCK", "/run/dshn-bridge/device-mcp.sock")
 
+        val caBundle = File(rootfs, "etc/ssl/certs/ca-certificates.crt")
+        if (caBundle.exists()) {
+            put("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+        }
+
+        if (!deepseekBaseUrl.isNullOrBlank()) {
+            put("DEEPSEEK_BASE_URL", deepseekBaseUrl.trim())
+        }
+        if (!deepseekSearchBaseUrl.isNullOrBlank()) {
+            put("DEEPSEEK_SEARCH_BASE_URL", deepseekSearchBaseUrl.trim())
+        }
+        if (!webSearchProvider.isNullOrBlank()) {
+            put("DSH_WEB_SEARCH_PROVIDER", webSearchProvider.trim())
+        }
+
         val keyFile = File(rootfs, "root/.dsh/api_key")
         if (keyFile.exists()) {
             val key = runCatching { keyFile.readText().trim() }.getOrDefault("")
             if (key.isNotEmpty()) put("DEEPSEEK_API_KEY", key)
         }
         putAll(extraEnv)
+
+        val dnsPreload = File(rootfs, "opt/dshn/dshn-dns-preload.cjs")
+        if (dnsPreload.exists()) {
+            val flag = "--require=/opt/dshn/dshn-dns-preload.cjs"
+            val cur = this["NODE_OPTIONS"].orEmpty().trim()
+            put("NODE_OPTIONS", if (cur.contains(flag)) cur else "$flag $cur".trim())
+        }
     }
 
     fun start(
@@ -94,11 +119,22 @@ class ContainerLauncher(private val context: Context) {
         cwd: String = "/root",
         permissionMode: String = "workspace-write",
         extraWorkspaceBind: String? = null,
+        deepseekBaseUrl: String? = null,
+        deepseekSearchBaseUrl: String? = null,
+        webSearchProvider: String? = null,
         extraEnv: Map<String, String> = emptyMap()
     ): Process {
         val cmd = command(guestExe, args.toList(), cwd = cwd, extraWorkspaceBind = extraWorkspaceBind)
         val pb = ProcessBuilder(cmd)
-        pb.environment().putAll(environment(permissionMode = permissionMode, extraEnv = extraEnv))
+        pb.environment().putAll(
+            environment(
+                permissionMode = permissionMode,
+                deepseekBaseUrl = deepseekBaseUrl,
+                deepseekSearchBaseUrl = deepseekSearchBaseUrl,
+                webSearchProvider = webSearchProvider,
+                extraEnv = extraEnv
+            )
+        )
         pb.redirectErrorStream(false)
         Log.i(TAG, "launch: $guestExe ${args.joinToString(" ")}")
         return pb.start()
