@@ -599,11 +599,19 @@ private fun EmptyChatState(cwd: String, enabled: Boolean, onPick: (String) -> Un
         Spacer(Modifier.height(24.dp))
         for (rowItems in suggestions.chunked(2)) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Max),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 for (s in rowItems) {
-                    SuggestionCard(s, enabled, Modifier.weight(1f)) { onPick(s.prompt) }
+                    SuggestionCard(
+                        s = s,
+                        enabled = enabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) { onPick(s.prompt) }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -628,11 +636,12 @@ private fun SuggestionCard(s: Suggestion, enabled: Boolean, modifier: Modifier, 
                 tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                 modifier = Modifier.size(20.dp)
             )
-            Text(s.title, style = MaterialTheme.typography.titleSmall)
+            Text(s.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 s.subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -1144,7 +1153,7 @@ private fun Composer(
         border = BorderStroke(1.dp, semantic.cardBorder),
         shadowElevation = if (semantic.isDark) 0.dp else 3.dp
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 8.dp)) {
+        Column(Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp)) {
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
@@ -1154,7 +1163,7 @@ private fun Composer(
                 maxLines = 6,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 6.dp, end = 8.dp),
+                    .padding(start = 4.dp, top = 8.dp, bottom = 6.dp, end = 8.dp),
                 decorationBox = { inner ->
                     Box {
                         if (value.isEmpty()) {
@@ -1184,6 +1193,7 @@ private fun Composer(
                         }
                     }
                 }
+                Spacer(Modifier.width(6.dp))
                 if (!readOnly && usageSize > 0) {
                     ContextUsage(usageUsed, usageSize)
                     Spacer(Modifier.width(6.dp))
@@ -1217,12 +1227,12 @@ private fun ConfigChip(opt: AcpConfigOption, onClick: () -> Unit) {
     val choice = currentChoiceName(opt)
     val label = when (kind) {
         "model" -> choice
-        "effort" -> tr("思考 · $choice", "Effort · $choice")
-        else -> "${opt.name} · $choice"
+        "effort" -> tr("思考·$choice", "Effort·$choice")
+        else -> "${opt.name}·$choice"
     }
     Surface(onClick = onClick, shape = RoundedCornerShape(999.dp), color = semantic.subtleBg) {
         Row(
-            modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -1235,7 +1245,7 @@ private fun ConfigChip(opt: AcpConfigOption, onClick: () -> Unit) {
                 modifier = Modifier.size(14.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(4.dp))
             Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
