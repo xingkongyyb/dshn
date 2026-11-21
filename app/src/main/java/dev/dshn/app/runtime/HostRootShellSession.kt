@@ -42,11 +42,14 @@ class HostRootShellSession(
         stdoutJob = scope.launch(Dispatchers.IO) {
             try {
                 val buf = ByteArray(2048)
+                var prevCr = false
                 while (true) {
                     val n = p.inputStream.read(buf)
                     if (n < 0) break
                     if (n > 0) {
-                        _output.tryEmit(String(buf, 0, n, Charsets.UTF_8))
+                        val (normalized, endedCr) = normalizeLfToCrLf(String(buf, 0, n, Charsets.UTF_8), prevCr)
+                        prevCr = endedCr
+                        _output.tryEmit(normalized)
                     }
                 }
             } catch (_: Exception) {
@@ -59,26 +62,33 @@ class HostRootShellSession(
         stderrJob = scope.launch(Dispatchers.IO) {
             runCatching {
                 val buf = ByteArray(2048)
+                var prevCr = false
                 while (true) {
                     val n = p.errorStream.read(buf)
                     if (n < 0) break
                     if (n > 0) {
-                        _output.tryEmit("\u001B[33m${String(buf, 0, n, Charsets.UTF_8)}\u001B[0m")
+                        val (normalized, endedCr) = normalizeLfToCrLf(String(buf, 0, n, Charsets.UTF_8), prevCr)
+                        prevCr = endedCr
+                        _output.tryEmit("\u001B[33m$normalized\u001B[0m")
                     }
                 }
             }
         }
 
         // Probe identity immediately so the user sees uid=0 confirmation
-        writeInput("id\n")
+        writeInput("id\n", echo = false)
     }
 
-    fun writeInput(text: String) {
+    fun writeInput(text: String, echo: Boolean = true) {
         if (!_running.value) return
         val out = stdin ?: return
         scope.launch(Dispatchers.IO) {
             runCatching {
                 synchronized(out) {
+                    if (echo) {
+                        val echoed = formatLocalEcho(text)
+                        if (echoed.isNotEmpty()) _output.tryEmit(echoed)
+                    }
                     out.write(text.toByteArray(Charsets.UTF_8))
                     out.flush()
                 }
@@ -102,5 +112,39 @@ class HostRootShellSession(
         runCatching { proc?.destroyForcibly() }
         proc = null
         _running.value = false
+    }
+
+    companion object {
+        /**
+         * Non-PTY pipes emit bare LF (`\n`) without CR (`\r`), which causes VT100 buffers to
+         * step down without returning to column 0 (staircase drift). Normalize bare LF to CRLF
+         * while preserving existing CRLF pairs across chunk boundaries.
+         */
+        internal fun normalizeLfToCrLf(text: String, prevEndedWithCr: Boolean = false): Pair<String, Boolean> {
+            if (text.isEmpty()) return "" to prevEndedWithCr
+            val sb = StringBuilder(text.length + 16)
+            var lastWasCr = prevEndedWithCr
+            for (ch in text) {
+                if (ch == '\n' && !lastWasCr) {
+                    sb.append("\r\n")
+                } else {
+                    sb.append(ch)
+                }
+                lastWasCr = (ch == '\r')
+            }
+            return sb.toString() to lastWasCr
+        }
+
+        internal fun formatLocalEcho(text: String): String = when {
+            text == "\u0003" -> "^C\r\n"
+            text == "\u0004" -> "^D\r\n"
+            text == "\u007F" -> "\b \b"
+            text.endsWith("\n") || text.endsWith("\r") -> {
+                val body = text.trimEnd('\r', '\n')
+                val (norm, _) = normalizeLfToCrLf(body)
+                "# $norm\r\n"
+            }
+            else -> normalizeLfToCrLf(text).first
+        }
     }
 }

@@ -14,6 +14,7 @@
 - Session list: stale refreshes are dropped, "live" dots clear when the runtime stops, non-fatal read warnings are shown under the session.
 - Snapshot restore treats a DEGRADED runtime as running.
 - Empty-chat 2×2 suggestion cards now enforce uniform height (`IntrinsicSize.Max` + `fillMaxHeight` + `minLines = 2` subtitle) so cards stay aligned when subtitles wrap; composer config chips gain spacing before the send button and tighter chip padding so model & effort chips fit cleanly without clipping.
+- Host Root terminal (`HostRootShellSession` + `TerminalScreen`): normalize bare LF (`\n`) pipe output to CRLF (`\r\n`) to eliminate staircase indentation, echo submitted commands (`# <cmd>`), and default Host Root mode to line-input mode (keeping live key mode default for Ubuntu PTY).
 
 ## 0.3.0 (2026-11-19)
 

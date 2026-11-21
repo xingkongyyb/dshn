@@ -68,7 +68,7 @@ fun TerminalScreen(vm: MainViewModel) {
     val rootAuthorized = rootAuth.status == RootAuthStatus.AUTHORIZED
 
     var ctrlSticky by remember { mutableStateOf(false) }
-    var rawKeys by remember { mutableStateOf(true) }
+    var rawKeys by remember(terminalMode) { mutableStateOf(terminalMode == TerminalShellMode.CONTAINER_UBUNTU) }
     var lineDraft by remember { mutableStateOf("") }
     var lastRawField by remember { mutableStateOf(TextFieldValue(" ", selection = TextRange(1))) }
     val vScroll = rememberScrollState()
@@ -195,8 +195,8 @@ fun TerminalScreen(vm: MainViewModel) {
                 ExtraKeyButton("ESC") { sendKey("\u001B") }
                 ExtraKeyButton("TAB") { sendKey("\t") }
                 ExtraKeyButton("CTRL", highlighted = ctrlSticky) { ctrlSticky = !ctrlSticky }
-                ExtraKeyButton("^C") { vm.sendTerminalInput("\u0003") }
-                ExtraKeyButton("^D") { vm.sendTerminalInput("\u0004") }
+                ExtraKeyButton("^C") { sendKey("\u0003") }
+                ExtraKeyButton("^D") { sendKey("\u0004") }
                 ExtraKeyButton("↑") { sendKey("\u001B[A") }
                 ExtraKeyButton("↓") { sendKey("\u001B[B") }
                 ExtraKeyButton("←") { sendKey("\u001B[D") }

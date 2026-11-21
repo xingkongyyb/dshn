@@ -1,5 +1,6 @@
 package dev.dshn.app.bridge
 
+import dev.dshn.app.runtime.HostRootShellSession
 import dev.dshn.app.ui.AnsiTerminalBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -72,5 +73,23 @@ class WirelessAdbAndTerminalTest {
 
         buf.append("\u001B[2J\u001B[Hfresh")
         assertEquals("fresh", buf.renderText().trim())
+    }
+
+    @Test
+    fun hostRootLfNormalizationPreventsAnsiStaircaseDrift() {
+        val (part1, endedCr1) = HostRootShellSession.normalizeLfToCrLf("line1\nline2\r", prevEndedWithCr = false)
+        assertEquals("line1\r\nline2\r", part1)
+        assertTrue(endedCr1)
+
+        val (part2, endedCr2) = HostRootShellSession.normalizeLfToCrLf("\nline3\n", prevEndedWithCr = endedCr1)
+        assertEquals("\nline3\r\n", part2)
+        assertEquals(false, endedCr2)
+
+        val buf = AnsiTerminalBuffer(cols = 60, rows = 10)
+        buf.append(HostRootShellSession.formatLocalEcho("date\n"))
+        buf.append(part1)
+        buf.append(part2)
+        val lines = buf.renderText().lines().filter { it.isNotEmpty() }
+        assertEquals(listOf("# date", "line1", "line2", "line3"), lines)
     }
 }
