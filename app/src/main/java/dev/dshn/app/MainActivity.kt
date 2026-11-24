@@ -4,16 +4,9 @@ import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,54 +19,53 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.dshn.app.ui.AboutScreen
-import dev.dshn.app.ui.AcpPermissionDialog
-import dev.dshn.app.ui.AppRoute
-import dev.dshn.app.ui.AppStrings
-import dev.dshn.app.ui.BackgroundSettingsScreen
-import dev.dshn.app.ui.BannerAction
-import dev.dshn.app.ui.ChatScreen
-import dev.dshn.app.ui.DeviceBridgeConfirmDialog
-import dev.dshn.app.ui.DeviceBridgeScreen
-import dev.dshn.app.ui.DeviceLabScreen
-import dev.dshn.app.ui.DiagnosticsScreen
-import dev.dshn.app.ui.DshnTheme
-import dev.dshn.app.ui.EnvironmentSettingsScreen
-import dev.dshn.app.ui.LocalIsZh
-import dev.dshn.app.ui.MainViewModel
-import dev.dshn.app.ui.ModelSettingsScreen
-import dev.dshn.app.ui.PermissionSettingsScreen
-import dev.dshn.app.ui.SecondaryScaffold
-import dev.dshn.app.ui.SettingsHomeScreen
-import dev.dshn.app.ui.SetupScreen
-import dev.dshn.app.ui.TerminalScreen
-import dev.dshn.app.ui.UserQuestionDialog
-import dev.dshn.app.ui.resolveIsDarkTheme
-import dev.dshn.app.ui.tr
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import dev.dshn.app.data.BannerAction
+import dev.dshn.app.navigation.DshnNavHost
+import dev.dshn.core.ui.DshnTheme
+import dev.dshn.core.ui.LocalIsZh
+import dev.dshn.core.ui.resolveIsDarkTheme
+import dev.dshn.feature.bridge.DeviceBridgeConfirmDialog
+import dev.dshn.feature.chat.AcpPermissionDialog
+import dev.dshn.feature.chat.ChatRoute
+import dev.dshn.feature.chat.UserQuestionDialog
+import dev.dshn.feature.settings.SettingsDiagnosticsRoute
+import dev.dshn.feature.settings.SettingsEnvironmentRoute
+import dev.dshn.feature.settings.SettingsModelRoute
+import dev.dshn.feature.setup.SetupRoute
 
 class MainActivity : ComponentActivity() {
-    private val vm: MainViewModel by viewModels()
+
+    private val appContainer by lazy { (application as DshnApplication).appContainer }
+    private val appVm: AppViewModel by viewModels { appContainer.appViewModelFactory }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            val settings by vm.settings.collectAsState()
-            val backStack by vm.backStack.collectAsState()
-            val setupRequired by vm.setupRequired.collectAsState()
-            val banner by vm.statusBanner.collectAsState()
-            val pendingPermission by vm.pendingPermission.collectAsState()
-            val pendingQuestion by vm.pendingQuestion.collectAsState()
-            val pendingBridgeConfirm by vm.pendingBridgeConfirm.collectAsState()
+            val settings by appVm.settings.collectAsStateWithLifecycle()
+            val banner by appVm.statusBanner.collectAsStateWithLifecycle()
+            val pendingPermission by appVm.pendingPermission.collectAsStateWithLifecycle()
+            val pendingQuestion by appVm.pendingQuestion.collectAsStateWithLifecycle()
+            val pendingBridgeConfirm by appVm.pendingBridgeConfirm.collectAsStateWithLifecycle()
+
+            val navController = rememberNavController()
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val isChatDestination = navBackStackEntry?.destination?.hasRoute<ChatRoute>() == true
+            val startDestination = remember {
+                if (appContainer.initialSetupRequired) SetupRoute(reopened = false) else ChatRoute
+            }
+
             val snackbarHostState = remember { SnackbarHostState() }
             var composerHeight by remember { mutableStateOf(0.dp) }
             val isDark = resolveIsDarkTheme(settings.themeMode)
@@ -94,9 +86,6 @@ class MainActivity : ComponentActivity() {
 
             DshnTheme(themeMode = settings.themeMode, localeMode = settings.localeMode) {
                 val isZh = LocalIsZh.current
-                val strings = AppStrings.resolve(settings.localeMode)
-                val saveableHolder = rememberSaveableStateHolder()
-                val route = backStack.last()
 
                 LaunchedEffect(banner?.id) {
                     val b = banner ?: return@LaunchedEffect
@@ -114,14 +103,14 @@ class MainActivity : ComponentActivity() {
                     )
                     if (result == SnackbarResult.ActionPerformed) {
                         when (b.action) {
-                            BannerAction.RESTART_RUNTIME -> vm.restartRuntime()
-                            BannerAction.OPEN_LOGS -> vm.navigate(AppRoute.SETTINGS_DIAGNOSTICS)
-                            BannerAction.OPEN_MODEL_SETTINGS -> vm.navigate(AppRoute.SETTINGS_MODEL)
-                            BannerAction.OPEN_ENVIRONMENT -> vm.navigate(AppRoute.SETTINGS_ENVIRONMENT)
+                            BannerAction.RESTART_RUNTIME -> appVm.restartRuntime()
+                            BannerAction.OPEN_LOGS -> navController.navigate(SettingsDiagnosticsRoute) { launchSingleTop = true }
+                            BannerAction.OPEN_MODEL_SETTINGS -> navController.navigate(SettingsModelRoute) { launchSingleTop = true }
+                            BannerAction.OPEN_ENVIRONMENT -> navController.navigate(SettingsEnvironmentRoute) { launchSingleTop = true }
                             null -> {}
                         }
                     }
-                    vm.dismissBanner(b.id)
+                    appVm.dismissBanner(b.id)
                 }
 
                 Box(
@@ -129,42 +118,14 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.background)
                 ) {
-                    if (setupRequired) {
-                        SetupScreen(vm)
-                    } else {
-                        BackHandler(enabled = backStack.size > 1) { vm.navigateBack() }
-                        AnimatedContent(
-                            targetState = route to backStack.size,
-                            transitionSpec = {
-                                val forward = targetState.second >= initialState.second
-                                (slideInHorizontally { w -> if (forward) w / 5 else -w / 5 } + fadeIn()) togetherWith
-                                    (slideOutHorizontally { w -> if (forward) -w / 8 else w / 5 } + fadeOut())
-                            },
-                            contentKey = { it.first },
-                            label = "route"
-                        ) { (r, _) ->
-                            saveableHolder.SaveableStateProvider(r.name) {
-                                when (r) {
-                                    AppRoute.CHAT -> ChatScreen(vm, onComposerHeight = { composerHeight = it })
-                                    AppRoute.TERMINAL -> TerminalScreen(vm)
-                                    AppRoute.DEVICE_BRIDGE -> DeviceBridgeScreen(vm)
-                                    AppRoute.DEVICE_LAB -> SecondaryScaffold(
-                                        title = tr("设备桥调试台", "Device bridge lab"),
-                                        onBack = { vm.navigateBack() }
-                                    ) { inner ->
-                                        DeviceLabScreen(vm = vm, strings = strings, modifier = Modifier.padding(inner))
-                                    }
-                                    AppRoute.SETTINGS -> SettingsHomeScreen(vm)
-                                    AppRoute.SETTINGS_MODEL -> ModelSettingsScreen(vm)
-                                    AppRoute.SETTINGS_PERMISSION -> PermissionSettingsScreen(vm)
-                                    AppRoute.SETTINGS_BACKGROUND -> BackgroundSettingsScreen(vm)
-                                    AppRoute.SETTINGS_ENVIRONMENT -> EnvironmentSettingsScreen(vm)
-                                    AppRoute.SETTINGS_DIAGNOSTICS -> DiagnosticsScreen(vm)
-                                    AppRoute.ABOUT -> AboutScreen(vm)
-                                }
-                            }
-                        }
-                    }
+                    DshnNavHost(
+                        navController = navController,
+                        appContainer = appContainer,
+                        activityOwner = this@MainActivity,
+                        startDestination = startDestination,
+                        onComposerHeight = { composerHeight = it },
+                        modifier = Modifier.fillMaxSize()
+                    )
 
                     SnackbarHost(
                         hostState = snackbarHostState,
@@ -172,32 +133,32 @@ class MainActivity : ComponentActivity() {
                             .align(Alignment.BottomCenter)
                             .navigationBarsPadding()
                             .imePadding()
-                            .padding(bottom = if (!setupRequired && route == AppRoute.CHAT) composerHeight + 8.dp else 12.dp)
+                            .padding(bottom = if (isChatDestination) composerHeight + 8.dp else 12.dp)
                     )
                 }
 
                 pendingPermission?.let { req ->
                     AcpPermissionDialog(
                         req = req,
-                        sessionLabel = vm.resolveSessionDisplayLabel(req.sessionId),
-                        onSelect = { optId -> vm.replyAcpPermission(optId, cancelled = false) },
-                        onCancel = { vm.replyAcpPermission(null, cancelled = true) }
+                        sessionLabel = appVm.resolveSessionDisplayLabel(req.sessionId),
+                        onSelect = { optId -> appVm.replyAcpPermission(optId, cancelled = false) },
+                        onCancel = { appVm.replyAcpPermission(null, cancelled = true) }
                     )
                 }
 
                 pendingBridgeConfirm?.let { req ->
                     DeviceBridgeConfirmDialog(
                         req = req,
-                        onDecision = { allow -> vm.respondBridgeConfirmation(allow) }
+                        onDecision = { allow -> appVm.respondBridgeConfirmation(allow) }
                     )
                 }
 
                 pendingQuestion?.let { req ->
                     UserQuestionDialog(
                         req = req,
-                        sessionLabel = vm.resolveSessionDisplayLabel(req.sessionId),
-                        onSubmit = { answers -> vm.replyUserQuestion(answers, cancelled = false) },
-                        onCancel = { vm.replyUserQuestion(emptyList(), cancelled = true) }
+                        sessionLabel = appVm.resolveSessionDisplayLabel(req.sessionId),
+                        onSubmit = { answers -> appVm.replyUserQuestion(answers, cancelled = false) },
+                        onCancel = { appVm.replyUserQuestion(emptyList(), cancelled = true) }
                     )
                 }
             }

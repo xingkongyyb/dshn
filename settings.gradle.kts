@@ -13,4 +13,16 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "DSHN"
-include(":app")
+include(
+    ":app",
+    ":core:security",
+    ":core:data",
+    ":core:bridge",
+    ":core:runtime",
+    ":core:ui",
+    ":feature:setup",
+    ":feature:chat",
+    ":feature:terminal",
+    ":feature:bridge",
+    ":feature:settings"
+)
