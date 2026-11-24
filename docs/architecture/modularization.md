@@ -28,7 +28,7 @@
 | `:feature:bridge` | 设备桥与 Root 页、调试台 | `DeviceBridgeScreen`、`DeviceLabScreen`/`DeviceLabCards`、`DeviceBridgeConfirmDialog`、`DeviceBridgeViewModel`、`HostPortParser` | 7 / 2110 | 1 |
 | `:feature:settings` | 分组设置 | 首页、模型、权限、后台、运行环境、日志诊断、关于共 7 个页面，以及 `SettingsViewModel`、`EnvironmentDiagnosticsViewModel`、`SettingsNavigation` | 10 / 1781 | 0 |
 
-单测共 39 个（拆分时 37 个，`677ae63` 又加了 2 个），拆分前是 34 个。
+单测共 39 个（拆分时 37 个，`fce3ad2` 又加了 2 个），拆分前是 34 个。
 
 ## 2. 依赖关系
 
@@ -86,7 +86,7 @@ core 模块保留旧包名，有三个原因：
   5. 所有 ViewModel 的 `Factory`。
 
   `init` 里会做四件事：判断是否需要首启向导、启动设备桥、绑定 `RuntimeService`，然后在后台探测 Root、刷新 Key 掩码，并执行 `initializeOnStartup`。
-- **生命周期变化**：协调器和各个会话对象现在属于整个进程，使用 `appScope = SupervisorJob + Dispatchers.Main.immediate`，永不取消。原来的 `MainViewModel` 跟着 Activity 走，Activity 结束时会在 `onCleared` 里停止终端、Root shell、设备桥并解绑运行时。现在 Activity 结束时只由 `TerminalViewModel.onCleared()` 停止终端和 Root shell（`677ae63` 补上）；设备桥和运行时绑定按设计保持到进程结束，以便后台代理会话继续使用设备桥。
+- **生命周期变化**：协调器和各个会话对象现在属于整个进程，使用 `appScope = SupervisorJob + Dispatchers.Main.immediate`，永不取消。原来的 `MainViewModel` 跟着 Activity 走，Activity 结束时会在 `onCleared` 里停止终端、Root shell、设备桥并解绑运行时。现在 Activity 结束时只由 `TerminalViewModel.onCleared()` 停止终端和 Root shell（`fce3ad2` 补上）；设备桥和运行时绑定按设计保持到进程结束，以便后台代理会话继续使用设备桥。
 
 ### 4.2 原 `MainViewModel` 去哪了
 
@@ -128,7 +128,7 @@ core 模块保留旧包名，有三个原因：
 | `DeviceBridgeRoute` / `DeviceLabRoute` | DeviceBridge 页面的条目，Lab 页共用它的 ViewModel | 离开设备桥页时 ViewModel 被清理，并停止 ADB 发现 |
 | `SettingsGraph`（Home / Model / Permission / Background / Environment / Diagnostics / About） | `SettingsGraph` 嵌套图条目，子页面共用 | Snackbar 的“去设置”“查看日志”等按钮可以从任意页面直接跳到子页面 |
 
-起始页由 `MainActivity` 在每次 `onCreate` 时调用 `appContainer.resolveInitialSetupRequired()` 按当前设置决定（`677ae63` 修复，见第 7 节第 1 条）。
+起始页由 `MainActivity` 在每次 `onCreate` 时调用 `appContainer.resolveInitialSetupRequired()` 按当前设置决定（`fce3ad2` 修复，见第 7 节第 1 条）。
 
 ## 5. 资源与原生库位置
 
@@ -150,7 +150,7 @@ $env:JAVA_TOOL_OPTIONS = "-Djava.io.tmpdir=$PWD/build/tmp"
 | 项 | 结果 |
 |---|---|
 | `assembleDebug` | ✅ `app/build/outputs/apk/debug/app-debug.apk`（约 180 MB，含内置环境） |
-| `testDebugUnitTest` | ✅ 39/39（`677ae63`，2026-11-24 22:1x 本机复跑） |
+| `testDebugUnitTest` | ✅ 39/39（`fce3ad2`，2026-11-24 22:1x 本机复跑） |
 | `lintDebug` | ✅ 0 个 error，61 个 warning（多为依赖版本过旧 `GradleDependency` 和 `SdCardPath`） |
 | 真机 | ❌ 未测。导航整体换成了 navigation-compose，需要上机检查跳转、返回键、向导和弹窗 |
 
@@ -185,11 +185,12 @@ $env:JAVA_TOOL_OPTIONS = "-Djava.io.tmpdir=$PWD/build/tmp"
 | `main` | `4531f89`，与 `origin/main` 一致 | 拆分前的稳定版（0.3.2 + 平板测试记录） |
 | `ui-redesign` | `4531f89` | 已快进合并进 `main`，内容与 `main` 相同，可保留或删除 |
 | `backup/pre-aistudio` | `4531f89` | 同步 AI Studio 前的备份点，不要在上面提交 |
-| `aistudio-refactor` | `47b6a01` → `b52f735`（本文）→ `677ae63`（审查修复） | **模块化后的开发分支**，所有针对新模块结构的改动都提交到这里；截至本节写入时领先 `origin/aistudio-refactor` 3 个提交（含本文更新），未推送 |
+| `backup/pre-resign-20261124` | `5c0d3ef` | 重新署名前的原始 3 个提交（署名都是 Codex），确认无误后可删除 |
+| `aistudio-refactor` | `47b6a01` → `677e4fb`（本文）→ `fce3ad2`（审查修复，Gemini）→ `bc32937`（本文更新）→ 署名规则提交 | **模块化后的开发分支**，所有针对新模块结构的改动都提交到这里；未推送 |
 | `aistudio/main`（远程） | `d4b2c27` → `1684851` | AI Studio 工程的导出，**与本仓库没有共同历史** |
 
 注意事项：
 
-- **提交者无法区分。** 本机全局 git 身份是 `Codex <codex@xiaomeng.local>`，Gemini、Codex 和 Claude 的提交都显示为这个作者；只有 Claude 的提交带 `Co-Authored-By` 尾注。建议每个代理提交时用 `--author="Gemini <…>"` 或加尾注，以后查问题时才能知道是谁改的。
-- **AI Studio 同步会覆盖本地修复。** `47b6a01` 是把 `aistudio/main` 的整棵文件树放到 `main` 之上得到的，两者只差 `gradlew` 的可执行位（AI Studio 那边是 644，这里是 755）。如果以后再从 AI Studio 整树同步，`b52f735` 和 `677ae63` 的改动会被冲掉。所以要么先把修复同步回 AI Studio，要么改用“在 `aistudio-refactor` 上应用 AI Studio 的差异”，并确认 `gradlew` 仍是 755。
+- **每个 AI 用自己的身份署名（2026-11-24 起）。** 规则写在根目录 `AGENTS.md`：名字填当时实际的模型名，邮箱按公司固定（`claude@`、`codex@`、`gemini@`、`tiantian@` + `xiaomeng.local`）。仓库默认名字设为“未署名”，本机的 `pre-commit` / `pre-merge-commit` 检查会拒绝未署名或邮箱不在名单内的提交。此前的提交都显示为 `Codex <codex@xiaomeng.local>`（当时全局身份），已推送的无法再区分；未推送的 3 个已按实际作者重新署名，原版本保留在 `backup/pre-resign-20261124`（旧哈希 `b52f735` / `677ae63` / `5c0d3ef`）。
+- **AI Studio 同步会覆盖本地修复。** `47b6a01` 是把 `aistudio/main` 的整棵文件树放到 `main` 之上得到的，两者只差 `gradlew` 的可执行位（AI Studio 那边是 644，这里是 755）。如果以后再从 AI Studio 整树同步，`677e4fb` 和 `fce3ad2` 的改动会被冲掉。所以要么先把修复同步回 AI Studio，要么改用“在 `aistudio-refactor` 上应用 AI Studio 的差异”，并确认 `gradlew` 仍是 755。
 - **推送。** 按约定只在本地管理，不主动推送。
