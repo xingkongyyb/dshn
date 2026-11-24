@@ -137,6 +137,14 @@ class TerminalViewModel(
         _terminalOutput.value = ""
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        // Activity-scoped ViewModel: stop interactive container PTY and uid=0 host root shell
+        // when MainActivity actually finishes so a root shell never lingers in the background.
+        terminalPty.stop()
+        hostRootShell.stop()
+    }
+
     class Factory(
         private val settingsStore: SettingsStore,
         private val environmentCoordinator: EnvironmentCoordinator,

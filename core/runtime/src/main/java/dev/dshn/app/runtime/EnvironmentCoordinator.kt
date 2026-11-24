@@ -17,6 +17,19 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
+ * Decides whether the runtime should auto-start after a bundled environment install succeeds.
+ * Evaluates live [onboardingCompleted] at completion time so finishing the setup wizard while
+ * extraction is still running still triggers automatic startup once extraction completes.
+ */
+internal fun shouldAutoStartAfterBundledInstall(
+    wasRunning: Boolean,
+    autoStartIfReady: Boolean,
+    onboardingCompleted: Boolean,
+    hasApiKey: Boolean,
+    runtimeAlreadyUsable: Boolean
+): Boolean = (wasRunning || autoStartIfReady || onboardingCompleted) && hasApiKey && !runtimeAlreadyUsable
+
+/**
  * Shared coordinator managing container rootfs assets, bundled runtime installation,
  * snapshots/restores, self-tests, and DSH upgrades across Setup, Chat, Terminal, and Settings.
  */
@@ -106,7 +119,10 @@ class EnvironmentCoordinator(
             )
         if (needsBundledInstall) {
             installBundledEnvironmentInternal(reinstall = currentManifest.rootfsReady, autoStartIfReady = !setupRequired)
-        } else if (!setupRequired && settingsStore.hasApiKey.value && envManager.isRootfsReady()) {
+        } else if ((!setupRequired || settingsStore.current().onboardingCompleted) &&
+            settingsStore.hasApiKey.value &&
+            envManager.isRootfsReady()
+        ) {
             _runtimeReattachRequests.tryEmit(Unit)
         }
     }
@@ -158,7 +174,14 @@ class EnvironmentCoordinator(
                         )
                     )
                 }
-                if ((wasRunning || autoStartIfReady) && settingsStore.hasApiKey.value && !isRuntimeUsable()) {
+                if (shouldAutoStartAfterBundledInstall(
+                        wasRunning = wasRunning,
+                        autoStartIfReady = autoStartIfReady,
+                        onboardingCompleted = settingsStore.current().onboardingCompleted,
+                        hasApiKey = settingsStore.hasApiKey.value,
+                        runtimeAlreadyUsable = isRuntimeUsable()
+                    )
+                ) {
                     _runtimeReattachRequests.tryEmit(Unit)
                 }
             },
@@ -174,6 +197,10 @@ class EnvironmentCoordinator(
     }
 
     fun upgradeDshToVersion(targetVersion: String = EnvManager.TARGET_DSH_VERSION) {
+        if (isInstallBusy()) {
+            showInstallingBanner()
+            return
+        }
         if (_dshUpgrading.value) return
         scope.launch(Dispatchers.IO) {
             _dshUpgrading.value = true
@@ -209,6 +236,10 @@ class EnvironmentCoordinator(
     }
 
     fun createEnvSnapshot() {
+        if (isInstallBusy()) {
+            showInstallingBanner()
+            return
+        }
         scope.launch(Dispatchers.IO) {
             val res = envManager.createSnapshot("user")
             statusBannerBus.show(
@@ -222,6 +253,10 @@ class EnvironmentCoordinator(
     }
 
     fun restoreEnvSnapshot(snapshotId: String) {
+        if (isInstallBusy()) {
+            showInstallingBanner()
+            return
+        }
         scope.launch(Dispatchers.IO) {
             val wasRunning = isRuntimeUsable()
             if (wasRunning) runtimeController.stopRuntime()
@@ -238,6 +273,11 @@ class EnvironmentCoordinator(
     }
 
     fun runSelfTest() {
+        if (isInstallBusy()) {
+            showInstallingBanner()
+            return
+        }
+        if (_selfTestRunning.value) return
         scope.launch(Dispatchers.IO) {
             _selfTestRunning.value = true
             val report = envManager.runSelfTest()

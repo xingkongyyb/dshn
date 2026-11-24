@@ -60,9 +60,13 @@ data class AppSettings(
     val deepseekBaseUrl: String? = null,
     val deepseekSearchBaseUrl: String? = null,
     val webSearchProvider: String = "",
+    /** Set once the first-run setup wizard has been finished or skipped. */
     val onboardingCompleted: Boolean = false,
+    /** Set once the user advances through the first-run setup wizard so process death mid-wizard does not skip remaining steps. */
     val setupWizardStarted: Boolean = false,
+    /** Last visited step index inside the first-run setup wizard. */
     val setupWizardStep: Int = 0,
+    /** Container working directory used for new chats. */
     val defaultCwd: String = "/root"
 )
 

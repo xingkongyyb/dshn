@@ -13,6 +13,13 @@ enum class RootPolicyMode {
 
 /**
  * Structured command policy for privileged Android host `su` execution (`device_root_exec`).
+ *
+ * Security invariants:
+ * - Hard-blocks access to DSHN's own secret/audit files (`files/security`, `secrets.enc`, `adb_identity.enc`, `audit.jsonl`)
+ *   in ALL modes so a prompt-injected agent cannot exfiltrate keys or tamper with audit history.
+ * - Hard-blocks catastrophic block-device / root-filesystem wipe patterns in ALL modes.
+ * - In [RootPolicyMode.ALLOWLIST_ONLY], only strictly validated structured argv commands are permitted.
+ * - In [RootPolicyMode.CUSTOM_WITH_CONFIRM], [PolicyDecision.Allowed.requiresMandatoryConfirmation] is always `true`.
  */
 object RootCommandPolicy {
     sealed interface PolicyDecision {

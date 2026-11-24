@@ -48,7 +48,7 @@ fun DshnNavHost(
             factory = appContainer.setupViewModelFactory,
             onCompleted = { reopened ->
                 if (reopened) {
-                    navController.popBackStack()
+                    navController.popBackStack<SetupRoute>(inclusive = true)
                 } else {
                     navController.navigate(ChatRoute) {
                         popUpTo<SetupRoute> { inclusive = true }
@@ -57,7 +57,7 @@ fun DshnNavHost(
                 }
             },
             onCancelReopened = {
-                navController.popBackStack()
+                navController.popBackStack<SetupRoute>(inclusive = true)
             }
         )
 

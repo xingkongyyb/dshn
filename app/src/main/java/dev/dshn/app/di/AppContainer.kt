@@ -81,7 +81,22 @@ class AppContainer(application: Application) {
         scope = appScope
     )
 
-    val initialSetupRequired: Boolean
+    /**
+     * Re-evaluates whether the first-run setup wizard is required using the latest persisted
+     * settings, API key state, and rootfs readiness. Called on every Activity launch so finishing
+     * setup and reopening the app within the same process never loops back to the wizard.
+     */
+    fun resolveInitialSetupRequired(): Boolean {
+        val (needSetup, markDone) = shouldRequireInitialSetup(
+            settings = settingsStore.current(),
+            hasApiKey = settingsStore.hasApiKey.value,
+            rootfsReady = envManager.isRootfsReady()
+        )
+        if (markDone) {
+            settingsStore.update { it.copy(onboardingCompleted = true) }
+        }
+        return needSetup
+    }
 
     val appViewModelFactory: ViewModelProvider.Factory = AppViewModel.Factory(
         settingsStore = settingsStore,
@@ -148,15 +163,7 @@ class AppContainer(application: Application) {
     )
 
     init {
-        val (needSetup, markDone) = shouldRequireInitialSetup(
-            settings = settingsStore.current(),
-            hasApiKey = settingsStore.hasApiKey.value,
-            rootfsReady = envManager.isRootfsReady()
-        )
-        if (markDone) {
-            settingsStore.update { it.copy(onboardingCompleted = true) }
-        }
-        initialSetupRequired = needSetup
+        val initialSetupRequired = resolveInitialSetupRequired()
 
         deviceBridgeServer.start()
         runtimeController.bind()

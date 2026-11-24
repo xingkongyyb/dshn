@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val isChatDestination = navBackStackEntry?.destination?.hasRoute<ChatRoute>() == true
             val startDestination = remember {
-                if (appContainer.initialSetupRequired) SetupRoute(reopened = false) else ChatRoute
+                if (appContainer.resolveInitialSetupRequired()) SetupRoute(reopened = false) else ChatRoute
             }
 
             val snackbarHostState = remember { SnackbarHostState() }

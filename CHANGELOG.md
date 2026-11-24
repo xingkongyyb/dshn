@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (aistudio-refactor, 2026-11-24)
+
+### Changed — Architecture
+- Modularized DSHN into 11 Gradle modules (`:app`, 5 `:core:*` modules, 5 `:feature:*` modules) with explicit constructor-injection `AppContainer`, type-safe `navigation-compose` routes, and lazy `:app` process initialization (keeping `:runtime` isolated).
+
+### Fixed — Post-modularization review fixes
+- Re-evaluate `AppContainer.resolveInitialSetupRequired()` on every `MainActivity.onCreate` so finishing the setup wizard and reopening the app within the same cached process lands on Chat instead of looping back to Setup.
+- Stop container PTY and host `uid=0` Root shell in `TerminalViewModel.onCleared()` when `MainActivity` finishes.
+- Evaluate live `onboardingCompleted` at bundled-environment install completion in `EnvironmentCoordinator` so finishing setup while extraction is still running automatically starts the runtime once extraction succeeds.
+- Use idempotent `popBackStack<SetupRoute>(inclusive = true)` when dismissing a re-opened Setup wizard to prevent double-tap back-stack over-popping.
+- Guard `upgradeDshToVersion`, `createEnvSnapshot`, `restoreEnvSnapshot`, and `runSelfTest` with `isInstallBusy()` (plus duplicate-run guard in `runSelfTest`).
+- Restored security-invariant KDoc comments in `RootCommandPolicy`, `TarGzExtractor`, and `SettingsStore`.
+
 ## 0.3.2 (2026-11-20)
 
 ### Added

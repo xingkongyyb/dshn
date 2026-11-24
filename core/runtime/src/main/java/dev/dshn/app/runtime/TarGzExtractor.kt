@@ -14,6 +14,18 @@ import java.util.zip.GZIPInputStream
 
 /**
  * Pure-Kotlin streaming `.tar.gz` extractor for Android & JVM unit tests.
+ *
+ * Features:
+ * - Single-pass streaming GZIP decompression + optional SHA-256 verification (drains compressed
+ *   trailer so the digest matches `sha256sum` byte-for-byte).
+ * - Supports USTAR (`prefix + name`), GNU LongName/LongLink (`'L'`/`'K'`), POSIX PAX extended
+ *   headers (`'x'`/`'g'`), octal and base-256 numeric fields, and `stripComponents`.
+ * - Safe for Android non-root app UIDs:
+ *   - Enforces owner `rwx` on directories (`| 0700`) and owner `rw` on regular files (`| 0600`)
+ *     while preserving all executable bits (`0111`).
+ *   - Converts tar hardlinks (`'1'`) to file copies (Android SELinux blocks `link(2)` for apps).
+ *   - Safely skips char/block device nodes and FIFOs (`'3'`/`'4'`/`'6'`).
+ *   - Rejects path traversal (`..` segments, NUL bytes) and never writes through leaf symlinks.
  */
 object TarGzExtractor {
 
@@ -306,6 +318,11 @@ object TarGzExtractor {
         }
     }
 
+    /**
+     * Normalizes a tar path, strips [stripComponents] leading segments, and rejects path traversal.
+     * Returns `null` if the entry should be skipped (e.g. stripped away completely).
+     * Returns `""` for the root directory `.` when `stripComponents == 0`.
+     */
     internal fun normalizeRelativePath(raw: String, stripComponents: Int): String? {
         if (raw.contains('\u0000')) throw IOException("Invalid NUL byte in tar entry path")
         var cleaned = raw.replace('\\', '/')

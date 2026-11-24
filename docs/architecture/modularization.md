@@ -160,16 +160,16 @@ $env:JAVA_TOOL_OPTIONS = "-Djava.io.tmpdir=$PWD/build/tmp"
 
 审查范围：`main...aistudio-refactor`，重点看新增和改写的代码，并对照旧 `MainViewModel` 检查是否有行为被删掉。被整体搬迁、内容不变的文件只核对了差异。
 
-**总体**：拆分方向正确，依赖干净，旧逻辑基本完整迁移，可以作为后续开发的基础。下面前三条建议合并前修复。
+**总体**：拆分方向正确，依赖干净，旧逻辑基本完整迁移，可以作为后续开发的基础。以下 6 项问题已于 2026-11-24 同日全部修复并补测（`DeviceBridgeMcpServer` 按设计继续保持进程级生命周期以支持后台代理会话）。
 
-| # | 级别 | 位置 | 问题 | 建议修法 |
-|---|---|---|---|---|
-| 1 | 重要 | `MainActivity.kt:66` / `AppContainer.initialSetupRequired` | **完成向导后再次打开 App，可能又回到向导第 1 步。** `initialSetupRequired` 是进程启动时算一次的常量，完成向导后不会更新；旧代码每次创建 Activity 都会重新判断。触发方式：完成向导 → 按返回键退出（Activity 结束，但主进程通常仍被系统缓存）→ 从桌面再次打开 | 每次创建 Activity 时用当前设置重新调用 `shouldRequireInitialSetup`，或改为 StateFlow，由 `completeSetup()` 清除 |
-| 2 | 重要 | `TerminalViewModel`（没有 `onCleared`） | **离开 App 后，宿主 Root shell（uid 0）和容器终端不会停止。** 旧 `MainViewModel.onCleared()` 会停止它们，同时停止设备桥并解绑运行时；现在这些对象属于整个进程。如果 Root 时效设为“手动撤销”，Root shell 会在后台一直存在 | 在 `TerminalViewModel` 加 `onCleared { terminalPty.stop(); hostRootShell.stop() }`（它跟 Activity 同生命周期，与旧行为一致）；设备桥是否应该在界面关闭后继续运行，需要明确决定 |
-| 3 | 重要 | `EnvironmentCoordinator.kt:108`（另有 117 行） | **首启时如果在内置环境解压完成前就填好 Key 并结束向导，运行环境不会自动启动。** 是否自动启动是在启动时根据 `!setupRequired` 定死的，旧代码是在安装完成时才判断；而 `startRuntimeAfterSetup()` 那时看到环境还没就绪，直接返回了 | 在安装成功回调里再读 `settingsStore.current().onboardingCompleted` 来决定 |
-| 4 | 小问题 | `DshnNavHost.kt:51/60` | 从设置里重新打开向导时，快速连点“关闭”或“开始使用”会连退两页，回到对话页 | 改用 `popBackStack<SetupRoute>(inclusive = true)`，或先确认当前页是 Setup 再返回 |
-| 5 | 已有问题 | `EnvironmentCoordinator.runSelfTest` / `upgradeDshToVersion` / `restoreEnvSnapshot` | 安装或重装环境期间，仍然可以执行自检、升级 DSH 或恢复快照。旧代码也是这样 | 给这三个入口加上 `isInstallBusy()` 检查和提示横幅 |
-| 6 | 小问题 | `RootCommandPolicy`、`TarGzExtractor`、`SettingsStore` | 搬迁时删掉了说明安全不变量的 KDoc（禁止访问密钥文件、禁止毁灭性命令、防路径穿越等）。代码没变，但后人改代码时看不到这些约束 | 从 `main` 恢复这些注释 |
+| # | 级别 | 状态 | 位置 | 问题 | 修复方案 |
+|---|---|---|---|---|---|
+| 1 | 重要 | ✅ 已修复 | `MainActivity.kt:66` / `AppContainer.resolveInitialSetupRequired()` | **完成向导后再次打开 App，可能又回到向导第 1 步。** `initialSetupRequired` 是进程启动时算一次的常量，完成向导后不会更新；旧代码每次创建 Activity 都会重新判断。触发方式：完成向导 → 按返回键退出（Activity 结束，但主进程通常仍被系统缓存）→ 从桌面再次打开 | `AppContainer` 改为方法 `resolveInitialSetupRequired()`，`MainActivity` 每次 `onCreate` 均按最新设置重算起始页 |
+| 2 | 重要 | ✅ 已修复 | `TerminalViewModel.onCleared()` | **离开 App 后，宿主 Root shell（uid 0）和容器终端不会停止。** 旧 `MainViewModel.onCleared()` 会停止它们，同时停止设备桥并解绑运行时；现在这些对象属于整个进程。如果 Root 时效设为“手动撤销”，Root shell 会在后台一直存在 | 在 Activity 作用域的 `TerminalViewModel` 中新增 `onCleared()` 停止 `terminalPty` 与 `hostRootShell`；`DeviceBridgeMcpServer` 保持进程级保活以配合后台运行时 |
+| 3 | 重要 | ✅ 已修复 | `EnvironmentCoordinator.kt` | **首启时如果在内置环境解压完成前就填好 Key 并结束向导，运行环境不会自动启动。** 是否自动启动是在启动时根据 `!setupRequired` 定死的，旧代码是在安装完成时才判断；而 `startRuntimeAfterSetup()` 那时看到环境还没就绪，直接返回了 | 抽出 `shouldAutoStartAfterBundledInstall(...)`，在安装成功回调里动态读取 `settingsStore.current().onboardingCompleted` 决定是否拉起运行时，并补充 JVM 单元测试 |
+| 4 | 小问题 | ✅ 已修复 | `DshnNavHost.kt:51/60` | 从设置里重新打开向导时，快速连点“关闭”或“开始使用”会连退两页，回到对话页 | 改用幂等的 `popBackStack<SetupRoute>(inclusive = true)` |
+| 5 | 已有问题 | ✅ 已修复 | `EnvironmentCoordinator` (`runSelfTest` / `upgradeDshToVersion` / `createEnvSnapshot` / `restoreEnvSnapshot`) | 安装或重装环境期间，仍然可以执行自检、升级 DSH、创建或恢复快照 | 四个入口均补上 `isInstallBusy()` 检查与提示横幅（并防止重复触发自检） |
+| 6 | 小问题 | ✅ 已修复 | `RootCommandPolicy`、`TarGzExtractor`、`SettingsStore` | 搬迁时删掉了说明安全不变量的 KDoc（禁止访问密钥文件、禁止毁灭性命令、防路径穿越等）。代码没变，但后人改代码时看不到这些约束 | 已从 `main` 恢复全部安全与字段 KDoc 注释 |
 
 **结构上的观察**（不算缺陷，留作后续优化）：
 
