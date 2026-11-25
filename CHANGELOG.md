@@ -5,6 +5,9 @@
 ### Changed — Architecture
 - Modularized DSHN into 11 Gradle modules (`:app`, 5 `:core:*` modules, 5 `:feature:*` modules) with explicit constructor-injection `AppContainer`, type-safe `navigation-compose` routes, and lazy `:app` process initialization (keeping `:runtime` isolated).
 
+### Changed — Chat composer
+- Model and reasoning effort are now one chip ("<model> · <effort>") that opens a compact dropdown instead of two bottom sheets: models and the current model's efforts side by side on screens ≥ 600×480 dp, or two levels (model → effort, with a back row) on phones. Picking another model switches immediately and then shows that model's efforts, since DSH only advertises efforts for the current model and resets the effort on a model switch. Known effort ids (off / low / high / max / default) get Chinese names and descriptions. Other config options use the same single-level dropdown. `RuntimeSessionCoordinator.setConfigOption` gained an `onResult` callback (new option list, or `null` when nothing was applied).
+
 ### Fixed — Post-modularization review fixes
 - Re-evaluate `AppContainer.resolveInitialSetupRequired()` on every `MainActivity.onCreate` so finishing the setup wizard and reopening the app within the same cached process lands on Chat instead of looping back to Setup.
 - Stop container PTY and host `uid=0` Root shell in `TerminalViewModel.onCleared()` when `MainActivity` finishes.

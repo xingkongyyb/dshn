@@ -92,7 +92,6 @@ fun ChatScreen(
     var input by rememberSaveable { mutableStateOf("") }
     val draftsBySession = remember { mutableStateMapOf<String, String>() }
     var lastDraftSessionId by rememberSaveable { mutableStateOf<String?>(null) }
-    var sheetOption by remember { mutableStateOf<AcpConfigOption?>(null) }
     var showDirDialog by remember { mutableStateOf(false) }
     var pendingEditDraft by remember { mutableStateOf<String?>(null) }
     var scrollToBottomNonce by remember { mutableIntStateOf(0) }
@@ -268,7 +267,8 @@ fun ChatScreen(
                     configOptions = configOptions,
                     usageUsed = usageUsed,
                     usageSize = usageSize,
-                    onOpenOption = { if (!readOnly) sheetOption = it },
+                    onSetOption = { id, value, onResult -> vm.setConfigOption(id, value, onResult) },
+                    configKey = sessionId,
                     onSend = {
                         if (vm.sendPromptOrCommand(input)) {
                             input = ""
@@ -280,18 +280,6 @@ fun ChatScreen(
                 )
             }
         }
-    }
-
-    sheetOption?.let { opt ->
-        val live = configOptions.firstOrNull { it.id == opt.id } ?: opt
-        ConfigOptionSheet(
-            option = live,
-            onSelect = { value ->
-                vm.setConfigOption(live.id, value)
-                sheetOption = null
-            },
-            onDismiss = { sheetOption = null }
-        )
     }
 
     if (showDirDialog) {

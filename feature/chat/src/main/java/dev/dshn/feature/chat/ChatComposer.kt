@@ -18,17 +18,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lightbulb
-import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -127,7 +124,8 @@ internal fun Composer(
     configOptions: List<AcpConfigOption>,
     usageUsed: Long,
     usageSize: Long,
-    onOpenOption: (AcpConfigOption) -> Unit,
+    onSetOption: SetConfigOption,
+    configKey: Any?,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -179,8 +177,13 @@ internal fun Composer(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (!readOnly) {
-                        for (opt in configOptions.filter { it.choices.isNotEmpty() }) {
-                            ConfigChip(opt) { onOpenOption(opt) }
+                        // Keyed by chat so an open menu or a pending switch never carries over to another chat.
+                        key(configKey) {
+                            val groups = groupComposerConfigOptions(configOptions)
+                            groups.model?.let { ModelEffortMenuChip(it, groups.effort, onSetOption) }
+                            for (opt in groups.others) {
+                                key(opt.id) { OptionMenuChip(opt, onSetOption) }
+                            }
                         }
                     }
                 }
@@ -209,38 +212,6 @@ internal fun Composer(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ConfigChip(opt: AcpConfigOption, onClick: () -> Unit) {
-    val semantic = LocalDshnColors.current
-    val kind = optionKind(opt)
-    val choice = currentChoiceName(opt)
-    val label = when (kind) {
-        "model" -> choice
-        "effort" -> tr("思考·$choice", "Effort·$choice")
-        else -> "${opt.name}·$choice"
-    }
-    Surface(onClick = onClick, shape = RoundedCornerShape(999.dp), color = semantic.subtleBg) {
-        Row(
-            modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                when (kind) {
-                    "model" -> Icons.Rounded.Memory
-                    "effort" -> Icons.Rounded.Lightbulb
-                    else -> Icons.Rounded.Tune
-                },
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

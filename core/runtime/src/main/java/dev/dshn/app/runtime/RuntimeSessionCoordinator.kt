@@ -907,13 +907,28 @@ class RuntimeSessionCoordinator(
         }
     }
 
-    fun setConfigOption(configId: String, value: String) {
-        if (_activeSessionReadOnly.value || !_sessionAttached.value) return
-        val sid = _activeSessionId.value ?: return
+    /**
+     * Sets one ACP config option on the active chat. [onResult] runs on the main thread with the
+     * complete option list after the change, or `null` when nothing was applied (failure, chat
+     * switched meanwhile, or no attached writable chat).
+     */
+    fun setConfigOption(
+        configId: String,
+        value: String,
+        onResult: (List<AcpConfigOption>?) -> Unit = {}
+    ) {
+        if (_activeSessionReadOnly.value || !_sessionAttached.value) {
+            onResult(null)
+            return
+        }
+        val sid = _activeSessionId.value ?: run {
+            onResult(null)
+            return
+        }
         scope.launch {
-            runCatching {
+            val result = runCatching {
                 val raw = runtimeController.setConfigOption(sid, configId, value)
-                if (sid != _activeSessionId.value) return@runCatching
+                if (sid != _activeSessionId.value) return@runCatching null
                 val updated = runCatching {
                     json.decodeFromString<List<AcpConfigOption>>(raw)
                 }.getOrNull()
@@ -924,9 +939,11 @@ class RuntimeSessionCoordinator(
                         if (it.id == configId) it.copy(currentValue = value) else it
                     }
                 }
+                _configOptions.value
             }.onFailure {
                 banner(t("切换失败：${it.message}", "Config update failed: ${it.message}"))
             }
+            onResult(result.getOrNull())
         }
     }
 

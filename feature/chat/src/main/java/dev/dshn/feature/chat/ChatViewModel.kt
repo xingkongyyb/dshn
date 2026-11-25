@@ -59,7 +59,11 @@ class ChatViewModel(
 
     fun cancelActivePrompt() = runtimeSessionCoordinator.cancelActivePrompt()
 
-    fun setConfigOption(configId: String, value: String) = runtimeSessionCoordinator.setConfigOption(configId, value)
+    fun setConfigOption(
+        configId: String,
+        value: String,
+        onResult: (List<AcpConfigOption>?) -> Unit = {}
+    ) = runtimeSessionCoordinator.setConfigOption(configId, value, onResult)
 
     fun startRuntimeAndAttach() = runtimeSessionCoordinator.startRuntimeAndAttach()
 
