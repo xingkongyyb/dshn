@@ -466,17 +466,19 @@ class EnvManager(
         val nativeRelaySrc = nativeLibDir?.let { File(it, "libdshn_mcp_relay.so") }
         if (nativeRelaySrc != null && nativeRelaySrc.isFile) {
             val nativeRelayDst = File(optDshn, "dshn-mcp-relay")
-            if (!nativeRelayDst.exists() || nativeRelayDst.length() != nativeRelaySrc.length()) {
-                writeFsyncAtomic(nativeRelayDst, nativeRelaySrc.readBytes())
+            val srcBytes = nativeRelaySrc.readBytes()
+            if (!nativeRelayDst.exists() || nativeRelayDst.length() != srcBytes.size.toLong() || !nativeRelayDst.readBytes().contentEquals(srcBytes)) {
+                writeFsyncAtomic(nativeRelayDst, srcBytes)
                 anyFileChanged = true
             }
             nativeRelayDst.setExecutable(true, false)
             nativeRelayDst.setReadable(true, false)
             digest.update("dshn-mcp-relay".toByteArray(Charsets.UTF_8))
-            digest.update(nativeRelaySrc.length().toString().toByteArray(Charsets.UTF_8))
+            digest.update(srcBytes)
         }
 
         ensureResolvConf()
+        val migratedCreds = migrateLegacyCredentialsYaml(rootfs)
         val patchedDsh = applyDshProfileResolutionOptimization(rootfs)
         val bundleHash = digest.digest().joinToString("") { "%02x".format(it) }
         val dshPkgVer = readDshPackageVersion()
@@ -489,6 +491,7 @@ class EnvManager(
             current.nodeVersion == nextNodeVer &&
             !anyFileChanged &&
             !patchedDsh &&
+            !migratedCreds &&
             manifestFile.exists()
         if (unchanged) {
             return current
@@ -502,6 +505,21 @@ class EnvManager(
         )
         saveManifest(updated)
         return updated
+    }
+
+    /**
+     * Migrates pre-release flat `/root/.dsh/.credentials.yaml` to DSH 0.2.2-rc.5+ `version: 1` + `refs:`
+     * schema so `credentials` / `authorization` / `deepseek-account` services activate cleanly without warnings.
+     */
+    internal fun migrateLegacyCredentialsYaml(targetRootfs: File): Boolean {
+        val credFile = File(targetRootfs, "root/.dsh/.credentials.yaml")
+        if (!credFile.isFile) return false
+        val raw = runCatching { credFile.readText(Charsets.UTF_8) }.getOrNull() ?: return false
+        val migrated = migrateLegacyCredentialsYamlText(raw) ?: return false
+        writeFsyncAtomic(credFile, migrated.toByteArray(Charsets.UTF_8))
+        credFile.setReadable(false, false); credFile.setReadable(true, true)
+        credFile.setWritable(false, false); credFile.setWritable(true, true)
+        return true
     }
 
     /**
@@ -897,6 +915,28 @@ class EnvManager(
         const val REQUIRED_ALLOW_SCRIPTS =
             "@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs"
         private const val PROFILE_RES_OPT_MARKER = "/* dshn-profile-resolution-opt-v1 */"
+
+        /**
+         * Wraps pre-release flat `.credentials.yaml` entries under `version: 1` + `refs:`.
+         * Returns `null` if already migrated, empty, or not a flat mapping.
+         */
+        internal fun migrateLegacyCredentialsYamlText(raw: String): String? {
+            val lines = raw.replace("\r\n", "\n").lines()
+            val nonBlank = lines.filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
+            if (nonBlank.isEmpty()) return null
+            if (nonBlank.any { it.trimStart().startsWith("version:") || it.trimStart().startsWith("refs:") }) {
+                return null
+            }
+            if (!nonBlank.first().contains(':')) return null
+            return buildString {
+                append("version: 1\n")
+                append("refs:\n")
+                for (line in lines) {
+                    if (line.isBlank()) continue
+                    append("  ").append(line).append("\n")
+                }
+            }
+        }
 
         /**
          * Pure transformation implementing DSH Sugar's MIT `profile-resolution.patch`.

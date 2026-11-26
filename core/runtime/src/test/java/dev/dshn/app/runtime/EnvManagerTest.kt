@@ -271,6 +271,15 @@ class EnvManagerTest {
         assertEquals(null, EnvManager.patchDshBootResolutionSource(patched))
     }
 
+    @Test
+    fun migratesPreReleaseFlatCredentialsYamlIdempotently() {
+        val legacy = "deepseek-api-key:\n  kind: env\n  name: DEEPSEEK_API_KEY\n"
+        val migrated = EnvManager.migrateLegacyCredentialsYamlText(legacy)
+        assertTrue(migrated != null)
+        assertTrue(migrated!!.startsWith("version: 1\nrefs:\n  deepseek-api-key:"))
+        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText(migrated))
+    }
+
     private fun sha256(data: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
 

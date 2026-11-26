@@ -339,21 +339,32 @@ class VirtualDisplayController(
             }
         }
 
-        // 2. Fallback to Wireless ADB when ADB Bridge is enabled & endpoint configured/discovered.
+        // 2. Fallback to Wireless ADB when ADB Bridge is enabled & endpoint configured/discovered
+        //    (or auto-probe local `adb tcpip 5555` loopback `127.0.0.1:5555`).
         if (settings.allowAdbBridge) {
             val ep = resolveAdbEndpoint(settings.lastAdbEndpoint)
-                ?: error("No Wireless ADB endpoint connected. Pair/connect Wireless ADB or authorize Root first.")
-            val session = adbClient.openVirtualDisplayAgentSession(
-                host = ep.first,
-                port = ep.second,
-                apkPath = apkPath,
-                nativeLibDir = nativeLibDir,
-                transportMode = settings.adbTransportMode
-            )
+                ?: ("127.0.0.1" to 5555)
+            val session = runCatching {
+                adbClient.openVirtualDisplayAgentSession(
+                    host = ep.first,
+                    port = ep.second,
+                    apkPath = apkPath,
+                    nativeLibDir = nativeLibDir,
+                    transportMode = settings.adbTransportMode
+                )
+            }.getOrElse { err ->
+                val detail = err.message ?: err.javaClass.simpleName
+                error(
+                    "无法经无线 ADB（${ep.first}:${ep.second}）启动虚拟屏：$detail。请先在下方「无线 ADB」连接本机（或在电脑执行一次 adb tcpip 5555 后再试），或授权 Root。"
+                )
+            }
+            if (settings.lastAdbEndpoint.isNullOrBlank()) {
+                settingsStore.update { it.copy(lastAdbEndpoint = "${ep.first}:${ep.second}") }
+            }
             return AdbTransport(session)
         }
 
-        error("Enable and authorize either Root Bridge or Wireless ADB Bridge to launch a background virtual display.")
+        error("请先开启并连接下方「无线 ADB」（或开启并授权「Root 命令」）后再启动后台虚拟屏。")
     }
 
     private fun resolveAdbEndpoint(saved: String?): Pair<String, Int>? {

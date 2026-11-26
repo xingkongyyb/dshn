@@ -449,13 +449,17 @@ class RuntimeSupervisor(
             return emptyList()
         }
         val nativeRelay = File(launcher.rootfs, "opt/dshn/dshn-mcp-relay")
+        val hostSock = File(launcher.bridgeDir, "device-mcp.sock").absolutePath
         return if (nativeRelay.isFile && nativeRelay.canExecute()) {
             listOf(
                 McpServerConfig.Stdio(
                     name = "dshn-device-bridge",
                     command = "/opt/dshn/dshn-mcp-relay",
                     args = emptyList(),
-                    env = mapOf("DSHN_DEVICE_MCP_SOCK" to "/run/dshn-bridge/device-mcp.sock")
+                    env = mapOf(
+                        "DSHN_DEVICE_MCP_SOCK" to "/run/dshn-bridge/device-mcp.sock",
+                        "DSHN_DEVICE_MCP_HOST_SOCK" to hostSock
+                    )
                 )
             )
         } else {
