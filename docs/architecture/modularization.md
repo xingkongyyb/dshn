@@ -186,7 +186,8 @@ $env:JAVA_TOOL_OPTIONS = "-Djava.io.tmpdir=$PWD/build/tmp"
 | `ui-redesign` | `4531f89` | 已快进合并进 `main`，内容与 `main` 相同，可保留或删除 |
 | `backup/pre-aistudio` | `4531f89` | 同步 AI Studio 前的备份点，不要在上面提交 |
 | `backup/pre-resign-20261124` | `5c0d3ef` | 重新署名前的原始 3 个提交（署名都是 Codex），确认无误后可删除 |
-| `aistudio-refactor` | `47b6a01` → `677e4fb`（本文）→ `fce3ad2`（审查修复，Gemini）→ `bc32937`（本文更新）→ 署名规则提交 | **模块化后的开发分支**，所有针对新模块结构的改动都提交到这里；未推送 |
+| `aistudio-refactor` | `47b6a01` → `677e4fb`（本文）→ `fce3ad2`（审查修复，Gemini）→ `bc32937`（本文更新）→ 署名规则提交 | **模块化后的开发分支**，所有针对新模块结构的常规改动都提交到这里 |
+| `feat/rust-perf-engine` | 基于 `aistudio-refactor` 演进（`v0.4.0-perf`） | **Rust 原生加速核心 + R8 裁剪 + Android 14+–17 后台虚拟屏分支**（保留 `bxroot` 与旧分支），架构与实机基准见 `docs/architecture/rust-perf-and-virtual-display.md` |
 | `aistudio/main`（远程） | `d4b2c27` → `1684851` | AI Studio 工程的导出，**与本仓库没有共同历史** |
 
 注意事项：

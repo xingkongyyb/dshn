@@ -27,6 +27,14 @@ DSHN runs inside a user-space **Ubuntu 24.04.5 LTS (Noble Numbat)** ARM64 contai
 
 ## 3. Android & Kotlin Libraries (Gradle Maven Dependencies)
 
-- **AndroidX (`core-ktx`, `activity-compose`, `lifecycle-*`, `compose-*`, `material3`)**: Apache License 2.0
+- **AndroidX (`core-ktx`, `activity-compose`, `lifecycle-*`, `compose-*`, `material3`, `profileinstaller`)**: Apache License 2.0
 - **Kotlin Standard Library & `kotlinx.coroutines` & `kotlinx.serialization`**: Apache License 2.0
 - **JUnit 4 (`junit:junit:4.13.2`)**: Eclipse Public License 1.0 (test scope only)
+
+## 4. Rust Native Dependencies (`rust/Cargo.lock`)
+
+Built into `libdshn_core.so` (`aarch64-linux-android`) and `libdshn_mcp_relay.so` (`aarch64-unknown-linux-musl`):
+
+- **`jni`**, **`serde`**, **`serde_json`**, **`flate2`** / **`zlib-rs`**, **`tar`**, **`sha2`**, **`ureq`**, **`rustls`**, **`webpki-roots`**, **`image`** / **`zune-jpeg`**, **`libc`**: MIT / Apache-2.0 / MPL-2.0
+- **`ruzstd`**: MIT License
+- **`ring`**: ISC / OpenSSL / BoringSSL-derived permissive licenses (see `rust/Cargo.lock` and upstream `briansmith/ring` `LICENSE`)

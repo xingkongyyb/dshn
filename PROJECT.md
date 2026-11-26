@@ -2,7 +2,7 @@
 
 > **DeepSeek Harness Native** —— 在 Android 上以原生 App 运行完整 DeepSeek Harness 智能体。
 > 默认免 ROOT（亦支持已 Root 设备的可选标准 `su` 授权）、免 Termux、零 DSH 补丁。bxroot 用户态容器 + 原生 Compose UI + 标准 ACP 协议。
-> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-19（v0.2.0：适配 DSH `0.2.2-rc.5` + 新增 Root 授权功能）。
+> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-27（`feat/rust-perf-engine` / `v0.4.0-perf`：Rust 原生性能核心 + R8 裁剪 + Android 14+–17 后台虚拟屏，详见 [docs/architecture/rust-perf-and-virtual-display.md](docs/architecture/rust-perf-and-virtual-display.md)）。
 
 ---
 
