@@ -420,6 +420,20 @@ class DeviceBridgeViewModel(
         }
     }
 
+    suspend fun pollVirtualDisplayFrameOnce() {
+        if (!virtualDisplayController.state.value.active) return
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            virtualDisplayController.observeIfIdle(
+                includeTree = false,
+                includeImage = true,
+                quality = 70,
+                maxWidth = 540,
+                skipUnchanged = true,
+                waitFrameMs = 0
+            )
+        }
+    }
+
     fun refreshVirtualDisplayFrame(skipUnchanged: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!virtualDisplayController.state.value.active) return@launch
@@ -428,7 +442,8 @@ class DeviceBridgeViewModel(
                 includeImage = true,
                 quality = 70,
                 maxWidth = 540,
-                skipUnchanged = skipUnchanged
+                skipUnchanged = skipUnchanged,
+                waitFrameMs = if (skipUnchanged) 0 else 250
             )
         }
     }

@@ -273,11 +273,27 @@ class EnvManagerTest {
 
     @Test
     fun migratesPreReleaseFlatCredentialsYamlIdempotently() {
-        val legacy = "deepseek-api-key:\n  kind: env\n  name: DEEPSEEK_API_KEY\n"
+        val legacy = "DEEPSEEK_API_KEY: sk-test-123\n"
         val migrated = EnvManager.migrateLegacyCredentialsYamlText(legacy)
         assertTrue(migrated != null)
-        assertTrue(migrated!!.startsWith("version: 1\nrefs:\n  deepseek-api-key:"))
-        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText(migrated))
+        assertEquals("version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-test-123\n", migrated)
+        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText(migrated!!))
+
+        // YAML document marker + comment + nested version field inside an entry
+        val withHeader = "---\n# old flat file\nmy_entry:\n  version: 2\n  value: abc\n"
+        val migratedHeader = EnvManager.migrateLegacyCredentialsYamlText(withHeader)
+        assertTrue(migratedHeader != null)
+        assertTrue(migratedHeader!!.startsWith("version: 1\nrefs:\n  # old flat file\n  my_entry:\n    version: 2\n"))
+        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText(migratedHeader))
+
+        // Structured refs missing version: 1
+        val refsOnly = "refs:\n  DEEPSEEK_API_KEY: sk-test\n"
+        assertEquals("version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-test\n", EnvManager.migrateLegacyCredentialsYamlText(refsOnly))
+
+        // Flow mapping + empty/comment no-ops
+        assertEquals("version: 1\nrefs: {\"DEEPSEEK_API_KEY\":\"sk-1\"}\n", EnvManager.migrateLegacyCredentialsYamlText("{\"DEEPSEEK_API_KEY\":\"sk-1\"}\n"))
+        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText("{}\n"))
+        assertEquals(null, EnvManager.migrateLegacyCredentialsYamlText("# comment only\n"))
     }
 
     private fun sha256(data: ByteArray): String =

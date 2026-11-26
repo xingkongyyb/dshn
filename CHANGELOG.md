@@ -24,6 +24,11 @@
 - Replaced `250 ms` polling in `waitForHealthyRuntime()` with zero-latency `StateFlow.first`, stepped `waitForBridgePing()` backoff (`30 -> 200 ms`), parallelized `refreshSessions()`, and added `40 ms` coalesced streaming token updates (0 ms TTFT penalty).
 - Replaced reflection-based `android.system.Os` calls in `TarGzExtractor` with direct Android SDK calls + parent-directory deduplication cache.
 
+### Fixed — Live Device Verification Fixes (vivo V2352A / Android 16)
+- **Static Rust MCP Relay UDS Path**: Static `musl` binary `dshn-mcp-relay` now connects directly to `DSHN_DEVICE_MCP_HOST_SOCK` (`/data/data/dev.dshn.app/files/bridge/device-mcp.sock`) first, bypassing `bxroot`'s `LD_PRELOAD` path translation (fixes `os error 2` on `/run/dshn-bridge/device-mcp.sock`).
+- **Virtual Display Preview Polling Mutex Starvation**: Replaced fire-and-forget 450 ms frame polling in `DeviceBridgeScreen` with suspending non-blocking `VirtualDisplayController.observeIfIdle` (`tryLock` + `wait_frame_ms = 0`), preventing background preview polling from starving `launchApp` / `tap` / `sendKey` / `close` operations on `opMutex`. Added automatic `127.0.0.1:5555` loopback fallback and actionable Chinese error prompts when Wireless ADB has not been connected yet.
+- **DSH `0.2.2-rc.5` Credentials Schema Migration**: Added idempotent `EnvManager.migrateLegacyCredentialsYaml` supporting pre-release flat YAML, YAML document markers (`---`), nested `version:` fields, flow mappings, and missing `version: 1` headers with `0600` permissions.
+
 ## Unreleased (aistudio-refactor, 2026-11-24)
 
 ### Changed — Architecture

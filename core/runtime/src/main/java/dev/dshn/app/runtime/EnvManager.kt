@@ -508,18 +508,24 @@ class EnvManager(
     }
 
     /**
-     * Migrates pre-release flat `/root/.dsh/.credentials.yaml` to DSH 0.2.2-rc.5+ `version: 1` + `refs:`
-     * schema so `credentials` / `authorization` / `deepseek-account` services activate cleanly without warnings.
+     * Migrates pre-release flat `/root/.dsh/.credentials.yaml` (and terminal `/root/.dsh-terminal/.credentials.yaml`)
+     * to DSH 0.2.2-rc.5+ `version: 1` + `refs:` schema so `credentials` / `authorization` / `deepseek-account`
+     * services activate cleanly without warnings.
      */
     internal fun migrateLegacyCredentialsYaml(targetRootfs: File): Boolean {
-        val credFile = File(targetRootfs, "root/.dsh/.credentials.yaml")
-        if (!credFile.isFile) return false
-        val raw = runCatching { credFile.readText(Charsets.UTF_8) }.getOrNull() ?: return false
-        val migrated = migrateLegacyCredentialsYamlText(raw) ?: return false
-        writeFsyncAtomic(credFile, migrated.toByteArray(Charsets.UTF_8))
-        credFile.setReadable(false, false); credFile.setReadable(true, true)
-        credFile.setWritable(false, false); credFile.setWritable(true, true)
-        return true
+        var anyMigrated = false
+        for (rel in listOf("root/.dsh/.credentials.yaml", "root/.dsh-terminal/.credentials.yaml")) {
+            val credFile = File(targetRootfs, rel)
+            if (!credFile.isFile) continue
+            val raw = runCatching { credFile.readText(Charsets.UTF_8) }.getOrNull() ?: continue
+            val migrated = migrateLegacyCredentialsYamlText(raw) ?: continue
+            writeFsyncAtomic(credFile, migrated.toByteArray(Charsets.UTF_8))
+            credFile.setReadable(false, false); credFile.setReadable(true, true)
+            credFile.setWritable(false, false); credFile.setWritable(true, true)
+            credFile.setExecutable(false, false)
+            anyMigrated = true
+        }
+        return anyMigrated
     }
 
     /**
@@ -918,22 +924,58 @@ class EnvManager(
 
         /**
          * Wraps pre-release flat `.credentials.yaml` entries under `version: 1` + `refs:`.
-         * Returns `null` if already migrated, empty, or not a flat mapping.
+         * Handles optional UTF-8 BOM, YAML document markers (`---`/`...`), indented nested keys,
+         * flow mappings (`{KEY: val}`), and missing `version: 1` above `refs:`/`records:`.
+         * Returns `null` if already versioned, empty, comment-only, or `{}`.
          */
         internal fun migrateLegacyCredentialsYamlText(raw: String): String? {
-            val lines = raw.replace("\r\n", "\n").lines()
-            val nonBlank = lines.filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
-            if (nonBlank.isEmpty()) return null
-            if (nonBlank.any { it.trimStart().startsWith("version:") || it.trimStart().startsWith("refs:") }) {
-                return null
+            val cleaned = raw.removePrefix("\uFEFF").replace("\r\n", "\n")
+            val rawLines = cleaned.lines()
+            val bodyLines = rawLines.filterNot { ln ->
+                val t = ln.trim()
+                t == "---" || t == "..."
             }
-            if (!nonBlank.first().contains(':')) return null
+            val meaningful = bodyLines.filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
+            if (meaningful.isEmpty()) return null
+
+            val joinedTrimmed = meaningful.joinToString("\n").trim()
+            if (joinedTrimmed == "{}") return null
+
+            // Single-line or multi-line JSON/YAML flow mapping without top-level `version`
+            if (joinedTrimmed.startsWith("{") && joinedTrimmed.endsWith("}")) {
+                val hasVersionKey = Regex("""["']?version["']?\s*:""").containsMatchIn(joinedTrimmed)
+                if (hasVersionKey) return null
+                return "version: 1\nrefs: $joinedTrimmed\n"
+            }
+
+            // Inspect ONLY unindented (top-level) YAML keys
+            val topLevelKeys = meaningful
+                .filter { !it.startsWith(" ") && !it.startsWith("\t") }
+                .mapNotNull { line ->
+                    val colon = line.indexOf(':')
+                    if (colon <= 0) null else line.substring(0, colon).trim().trim('"', '\'')
+                }
+            if (topLevelKeys.isEmpty()) return null
+            if (topLevelKeys.any { it == "version" }) return null
+
+            // If top-level already uses structured `refs:`/`records:` sections, only prepend `version: 1`
+            val structuredOnly = topLevelKeys.all { it == "refs" || it == "records" } &&
+                bodyLines.any { it.startsWith("  ") || it.startsWith("\t") }
+            if (structuredOnly) {
+                val content = bodyLines.joinToString("\n").trimEnd('\n')
+                return "version: 1\n$content\n"
+            }
+
             return buildString {
                 append("version: 1\n")
                 append("refs:\n")
-                for (line in lines) {
-                    if (line.isBlank()) continue
-                    append("  ").append(line).append("\n")
+                val trimmedBody = bodyLines.dropLastWhile { it.isBlank() }
+                for (line in trimmedBody) {
+                    if (line.isBlank()) {
+                        append("\n")
+                    } else {
+                        append("  ").append(line).append("\n")
+                    }
                 }
             }
         }

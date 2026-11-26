@@ -406,6 +406,7 @@ public final class VirtualDisplayAgent {
         int quality = clamp(args.optInt("quality", 72), 35, 95);
         int maxWidth = clamp(args.optInt("max_width", width), 240, width);
         int maxNodes = clamp(args.optInt("max_nodes", 160), 20, 400);
+        int waitFrameMs = clamp(args.optInt("wait_frame_ms", 900), 0, 3000);
         long prevHash = args.optLong("previous_hash", 0L);
 
         JSONObject out = new JSONObject()
@@ -420,7 +421,7 @@ public final class VirtualDisplayAgent {
         }
 
         if (includeImage) {
-            FrameCapture cap = captureLatestJpeg(maxWidth, quality, prevHash);
+            FrameCapture cap = captureLatestJpeg(maxWidth, quality, prevHash, waitFrameMs);
             out.put("frame_uptime_ms", cap.uptimeMs);
             out.put("frame_hash", cap.hash);
             out.put("unchanged", cap.unchanged);
@@ -454,14 +455,18 @@ public final class VirtualDisplayAgent {
         }
     }
 
-    private FrameCapture captureLatestJpeg(int maxWidth, int quality, long previousHash) throws Exception {
+    private FrameCapture captureLatestJpeg(int maxWidth, int quality, long previousHash, int waitFrameMs) throws Exception {
         int dstW = Math.min(width, maxWidth);
         int dstH = Math.max(1, (int) Math.round((double) height * dstW / width));
 
         synchronized (frameLock) {
-            long deadline = SystemClock.uptimeMillis() + 900L;
-            while (latestImage == null && !closed && SystemClock.uptimeMillis() < deadline) {
-                frameLock.wait(100L);
+            if (latestImage == null && waitFrameMs > 0) {
+                long deadline = SystemClock.uptimeMillis() + waitFrameMs;
+                while (latestImage == null && !closed && SystemClock.uptimeMillis() < deadline) {
+                    long remaining = deadline - SystemClock.uptimeMillis();
+                    if (remaining <= 0L) break;
+                    frameLock.wait(Math.min(100L, remaining));
+                }
             }
             if (latestImage == null) {
                 return new FrameCapture(null, dstW, dstH, previousHash, 0L, true, rustBridge.isAvailable());

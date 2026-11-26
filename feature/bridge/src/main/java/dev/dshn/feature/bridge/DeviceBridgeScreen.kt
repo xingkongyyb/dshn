@@ -105,7 +105,7 @@ fun DeviceBridgeScreen(
     }
     LaunchedEffect(vdState.active) {
         while (vdState.active) {
-            vm.refreshVirtualDisplayFrame(skipUnchanged = true)
+            vm.pollVirtualDisplayFrameOnce()
             delay(450)
         }
     }

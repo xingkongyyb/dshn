@@ -232,46 +232,80 @@ class VirtualDisplayController(
         quality: Int = 72,
         maxWidth: Int = 720,
         maxNodes: Int = 160,
-        skipUnchanged: Boolean = false
+        skipUnchanged: Boolean = false,
+        waitFrameMs: Int = 900
     ): Result<JsonObject> = opMutex.withLock {
-        runCatching {
-            val res = sendCommandLocked(
-                "observe",
-                buildJsonObject {
-                    put("include_tree", includeTree)
-                    put("include_image", includeImage)
-                    put("quality", quality)
-                    put("max_width", maxWidth)
-                    put("max_nodes", maxNodes)
-                    put("previous_hash", if (skipUnchanged) lastFrameHash else 0L)
-                },
-                timeoutMs = 12_000L
-            )
-            checkOk(res)
-            val top = res["top_component"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            if (top.isNotEmpty()) _state.value = _state.value.copy(topComponent = top)
+        observeLocked(includeTree, includeImage, quality, maxWidth, maxNodes, skipUnchanged, waitFrameMs)
+    }
 
-            val unchanged = res["unchanged"]?.jsonPrimitive?.booleanOrNull ?: false
-            val b64 = res["jpeg_base64"]?.jsonPrimitive?.contentOrNull
-            if (!unchanged && !b64.isNullOrEmpty()) {
-                val bytes = Base64.getDecoder().decode(b64)
-                val hash = res["frame_hash"]?.jsonPrimitive?.longOrNull ?: 0L
-                lastFrameHash = hash
-                _latestFrame.value = VirtualFrameSnapshot(
-                    jpegBytes = bytes,
-                    width = res["image_width"]?.jsonPrimitive?.intOrNull ?: _state.value.width,
-                    height = res["image_height"]?.jsonPrimitive?.intOrNull ?: _state.value.height,
-                    hash = hash,
-                    encoder = res["encoder"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    timestampMs = System.currentTimeMillis()
-                )
-                runCatching {
-                    if (!screensDir.exists()) screensDir.mkdirs()
-                    File(screensDir, "vd_latest.jpg").writeBytes(bytes)
-                }
-            }
-            res
+    /**
+     * Non-blocking preview poll for UI refresh loops. Skips immediately when another
+     * user operation (launch/tap/key/close) holds [opMutex], preventing FIFO starvation.
+     */
+    suspend fun observeIfIdle(
+        includeTree: Boolean = false,
+        includeImage: Boolean = true,
+        quality: Int = 70,
+        maxWidth: Int = 540,
+        maxNodes: Int = 160,
+        skipUnchanged: Boolean = true,
+        waitFrameMs: Int = 0
+    ): Result<JsonObject>? {
+        if (!opMutex.tryLock()) return null
+        return try {
+            if (!_state.value.active || transport == null) return null
+            observeLocked(includeTree, includeImage, quality, maxWidth, maxNodes, skipUnchanged, waitFrameMs)
+        } finally {
+            opMutex.unlock()
         }
+    }
+
+    private suspend fun observeLocked(
+        includeTree: Boolean,
+        includeImage: Boolean,
+        quality: Int,
+        maxWidth: Int,
+        maxNodes: Int,
+        skipUnchanged: Boolean,
+        waitFrameMs: Int
+    ): Result<JsonObject> = runCatching {
+        val res = sendCommandLocked(
+            "observe",
+            buildJsonObject {
+                put("include_tree", includeTree)
+                put("include_image", includeImage)
+                put("quality", quality)
+                put("max_width", maxWidth)
+                put("max_nodes", maxNodes)
+                put("wait_frame_ms", waitFrameMs)
+                put("previous_hash", if (skipUnchanged) lastFrameHash else 0L)
+            },
+            timeoutMs = 12_000L
+        )
+        checkOk(res)
+        val top = res["top_component"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (top.isNotEmpty()) _state.value = _state.value.copy(topComponent = top)
+
+        val unchanged = res["unchanged"]?.jsonPrimitive?.booleanOrNull ?: false
+        val b64 = res["jpeg_base64"]?.jsonPrimitive?.contentOrNull
+        if (!unchanged && !b64.isNullOrEmpty()) {
+            val bytes = Base64.getDecoder().decode(b64)
+            val hash = res["frame_hash"]?.jsonPrimitive?.longOrNull ?: 0L
+            lastFrameHash = hash
+            _latestFrame.value = VirtualFrameSnapshot(
+                jpegBytes = bytes,
+                width = res["image_width"]?.jsonPrimitive?.intOrNull ?: _state.value.width,
+                height = res["image_height"]?.jsonPrimitive?.intOrNull ?: _state.value.height,
+                hash = hash,
+                encoder = res["encoder"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                timestampMs = System.currentTimeMillis()
+            )
+            runCatching {
+                if (!screensDir.exists()) screensDir.mkdirs()
+                File(screensDir, "vd_latest.jpg").writeBytes(bytes)
+            }
+        }
+        res
     }
 
     suspend fun tap(x: Float, y: Float): Result<JsonObject> = opMutex.withLock {
