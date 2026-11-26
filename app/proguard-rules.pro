@@ -34,6 +34,9 @@
     native <methods>;
 }
 
+# Android 14+ background virtual display shell agent launched via app_process
+-keep class dev.dshn.app.bridge.virtualdisplay.** { *; }
+
 # Reflection fallback for java.lang.Process pid extraction on older runtimes
 -dontwarn java.lang.ProcessHandle
 -dontwarn org.conscrypt.**

@@ -46,6 +46,7 @@ data class AppSettings(
     val allowAccessibilityControl: Boolean = false,
     val allowAdbBridge: Boolean = false,
     val allowRootBridge: Boolean = false,
+    val allowVirtualDisplay: Boolean = false,
     val rootPolicyMode: RootPolicyMode = RootPolicyMode.ALLOWLIST_ONLY,
     val rootSessionTtlMinutes: Int = 30,
     val customSuBinaryPath: String? = null,

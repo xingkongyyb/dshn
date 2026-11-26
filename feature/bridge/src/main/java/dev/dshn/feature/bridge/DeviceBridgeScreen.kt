@@ -1,20 +1,33 @@
 package dev.dshn.feature.bridge
 
+import android.graphics.BitmapFactory
+import android.os.Build
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Cable
@@ -83,10 +96,18 @@ fun DeviceBridgeScreen(
     val probe by vm.adbProbeState.collectAsStateWithLifecycle()
     val rootAuth by vm.rootAuthState.collectAsStateWithLifecycle()
     val rootAuthorizing by vm.rootAuthorizing.collectAsStateWithLifecycle()
+    val vdState by vm.virtualDisplayState.collectAsStateWithLifecycle()
+    val vdFrame by vm.virtualDisplayFrame.collectAsStateWithLifecycle()
     val audit by vm.auditEntries.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         vm.onEntered()
+    }
+    LaunchedEffect(vdState.active) {
+        while (vdState.active) {
+            vm.refreshVirtualDisplayFrame(skipUnchanged = true)
+            delay(450)
+        }
     }
 
     var confirmDisableConfirm by remember { mutableStateOf(false) }
@@ -94,12 +115,14 @@ fun DeviceBridgeScreen(
     var confirmClearAudit by remember { mutableStateOf(false) }
     var endpointDraft by remember(settings.lastAdbEndpoint) { mutableStateOf(settings.lastAdbEndpoint ?: "127.0.0.1:5555") }
     var suDraft by remember(settings.customSuBinaryPath) { mutableStateOf(settings.customSuBinaryPath.orEmpty()) }
+    var vdPkgDraft by remember { mutableStateOf("com.android.settings") }
     val timeFmt = remember { SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()) }
 
     val master = settings.bridgeEnabled
     val anyOn = master || settings.allowAccessibilityRead || settings.allowAccessibilityControl ||
-        settings.allowAdbBridge || settings.allowRootBridge
+        settings.allowAdbBridge || settings.allowRootBridge || settings.allowVirtualDisplay
     val rootAuthorized = rootAuth.status == RootAuthStatus.AUTHORIZED
+    val vdSupported = Build.VERSION.SDK_INT >= 34
 
     SecondaryScaffold(
         title = tr("设备桥与 Root", "Device bridge & Root"),
@@ -176,6 +199,22 @@ fun DeviceBridgeScreen(
                     )
                     SettingsDivider()
                     SwitchRow(
+                        title = tr("后台虚拟屏（Android 14+）", "Background virtual display (Android 14+)"),
+                        subtitle = if (vdSupported) {
+                            tr("经 Root 或无线 ADB 独立建屏，不打扰主屏（含 Rust 帧编码）", "Off-screen virtual display via Root or Wireless ADB (Rust JPEG)")
+                        } else {
+                            tr("当前系统低于 Android 14，暂不支持", "Requires Android 14+ (API 34+)")
+                        },
+                        icon = Icons.Rounded.ScreenSearchDesktop,
+                        checked = settings.allowVirtualDisplay,
+                        enabled = master && vdSupported,
+                        onCheckedChange = { v ->
+                            vm.updateSettings { it.copy(allowVirtualDisplay = v) }
+                            if (!v && vdState.active) vm.closeVirtualDisplay()
+                        }
+                    )
+                    SettingsDivider()
+                    SwitchRow(
                         title = tr("高危操作逐次确认", "Confirm risky actions"),
                         subtitle = tr("强烈建议保持开启", "Strongly recommended"),
                         icon = Icons.Rounded.Shield,
@@ -195,6 +234,139 @@ fun DeviceBridgeScreen(
                             .padding(top = 10.dp)
                             .testTag("bridge_lock_all_button")
                     ) { Text(tr("一键全部关闭并撤销 Root", "Turn everything off & revoke Root")) }
+                }
+            }
+            if (vdSupported) {
+                item {
+                    val vdTone = when {
+                        vdState.active -> PillTone.SUCCESS
+                        vdState.starting -> PillTone.INFO
+                        !vdState.lastError.isNullOrBlank() -> PillTone.ERROR
+                        else -> PillTone.NEUTRAL
+                    }
+                    val vdLabel = when {
+                        vdState.active -> "Display #${vdState.displayId} · ${vdState.driver}"
+                        vdState.starting -> tr("启动中…", "Starting…")
+                        else -> tr("未启动", "Stopped")
+                    }
+                    SettingsGroup(
+                        tr("后台虚拟屏（Android 14+）", "Background virtual display (Android 14+)"),
+                        footer = tr(
+                            "直接通过 DisplayManager 创建受信任独立虚拟屏，绕过厂商禁用 overlay_display_devices 的限制；需要开启并连接无线 ADB 或授权 Root。",
+                            "Creates an independent trusted VirtualDisplay via DisplayManager (bypasses OEM overlay_display_devices blocks). Requires Wireless ADB or authorized Root."
+                        )
+                    ) {
+                        SettingsRow(
+                            title = if (vdState.active) {
+                                tr("虚拟屏运行中", "Virtual display active")
+                            } else {
+                                tr("独立后台屏幕", "Off-screen virtual display")
+                            },
+                            subtitle = when {
+                                vdState.active -> buildString {
+                                    append("${vdState.width}×${vdState.height} @${vdState.dpi}dpi")
+                                    append(if (vdState.rustEncoder) " · Rust JPEG" else " · Android JPEG")
+                                    if (vdState.topComponent.isNotBlank()) append("\n${vdState.topComponent}")
+                                }
+                                !vdState.lastError.isNullOrBlank() -> vdState.lastError
+                                else -> tr("启动后 Agent 可在后台独立打开和操作应用", "Lets the agent launch and control apps off-screen")
+                            },
+                            icon = Icons.Rounded.ScreenSearchDesktop,
+                            showChevron = false,
+                            trailing = { StatusPill(vdLabel, vdTone, showDot = true) }
+                        )
+                        Column(
+                            Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (!vdState.active) {
+                                    Button(
+                                        enabled = !vdState.starting && (settings.allowRootBridge || settings.allowAdbBridge),
+                                        onClick = { vm.openVirtualDisplay() }
+                                    ) {
+                                        if (vdState.starting) {
+                                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Text(tr("启动虚拟屏", "Start virtual display"))
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { vm.closeVirtualDisplay() },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                    ) { Text(tr("关闭虚拟屏", "Stop")) }
+                                    FilledTonalButton(onClick = { vm.sendVirtualDisplayKey("back") }) {
+                                        Text(tr("返回", "Back"))
+                                    }
+                                    FilledTonalButton(onClick = { vm.refreshVirtualDisplayFrame(skipUnchanged = false) }) {
+                                        Text(tr("刷新", "Refresh"))
+                                    }
+                                }
+                            }
+                            if (vdState.active) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = vdPkgDraft,
+                                        onValueChange = { vdPkgDraft = it },
+                                        singleLine = true,
+                                        label = { Text(tr("应用包名", "Package name")) },
+                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    FilledTonalButton(
+                                        enabled = vdPkgDraft.contains('.'),
+                                        onClick = { vm.launchAppOnVirtualDisplay(vdPkgDraft.trim()) }
+                                    ) { Text(tr("打开", "Launch")) }
+                                }
+                                val previewBmp = remember(vdFrame?.timestampMs) {
+                                    vdFrame?.jpegBytes?.let { bytes ->
+                                        runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(vdState.width.toFloat() / vdState.height.toFloat())
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .pointerInput(vdState.width, vdState.height) {
+                                            detectTapGestures { offset ->
+                                                if (size.width > 0 && size.height > 0) {
+                                                    val vx = (offset.x / size.width) * vdState.width
+                                                    val vy = (offset.y / size.height) * vdState.height
+                                                    vm.tapOnVirtualDisplay(vx, vy)
+                                                }
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (previewBmp != null) {
+                                        Image(
+                                            bitmap = previewBmp,
+                                            contentDescription = tr("后台虚拟屏实时预览（点击可操控）", "Live virtual display preview (tap to interact)"),
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Text(
+                                            tr("等待虚拟屏渲染首帧，点击上方「打开」启动一个应用试试", "Waiting for first frame; launch an app above to render"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             item {

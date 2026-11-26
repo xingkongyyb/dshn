@@ -377,6 +377,151 @@ class WirelessAdbClient(
         "transport=$resolvedMode, exit=${res.exitCode}, model=${res.stdout.trim()}"
     }
 
+    /**
+     * Full-duplex `shell,v2,raw:` ADB session scoped exclusively to running DSHN's own signed
+     * [dev.dshn.app.bridge.virtualdisplay.VirtualDisplayAgent] via `app_process`.
+     */
+    class AdbRawShellSession internal constructor(
+        private val socket: Socket,
+        private val inp: InputStream,
+        private val out: OutputStream,
+        private val localId: Int,
+        private val remoteId: Int
+    ) : java.io.Closeable {
+        private val writeLock = Any()
+        private val v2Accum = ByteArrayOutputStream()
+        private val stdoutLineBuf = ByteArrayOutputStream()
+        @Volatile private var closed = false
+
+        fun writeLine(line: String) {
+            val data = (line + "\n").toByteArray(Charsets.UTF_8)
+            val frame = ByteBuffer.allocate(5 + data.size)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put(0.toByte()) // kIdStdin
+                .putInt(data.size)
+                .put(data)
+                .array()
+            synchronized(writeLock) {
+                if (closed) throw java.io.IOException("ADB shell session closed")
+                writeAdbPacket(out, CMD_WRTE, localId, remoteId, frame)
+            }
+        }
+
+        fun readStdoutLine(): String? {
+            while (!closed) {
+                extractBufferedLine()?.let { return it }
+                val pkt = try {
+                    readAdbPacket(inp)
+                } catch (_: EOFException) {
+                    close()
+                    return null
+                }
+                when (pkt.command) {
+                    CMD_WRTE -> {
+                        synchronized(writeLock) {
+                            if (!closed) {
+                                runCatching { writeAdbPacket(out, CMD_OKAY, localId, remoteId, ByteArray(0)) }
+                            }
+                        }
+                        v2Accum.write(pkt.payload)
+                        val bytes = v2Accum.toByteArray()
+                        var offset = 0
+                        while (offset + 5 <= bytes.size) {
+                            val packetId = bytes[offset].toInt() and 0xFF
+                            val len = ByteBuffer.wrap(bytes, offset + 1, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                            if (len < 0 || offset + 5 + len > bytes.size) break
+                            if (packetId == 1) {
+                                stdoutLineBuf.write(bytes, offset + 5, len)
+                            }
+                            offset += 5 + len
+                        }
+                        if (offset > 0) {
+                            v2Accum.reset()
+                            if (offset < bytes.size) v2Accum.write(bytes, offset, bytes.size - offset)
+                        }
+                    }
+                    CMD_CLSE -> {
+                        close()
+                        return extractBufferedLine()
+                    }
+                }
+            }
+            return null
+        }
+
+        private fun extractBufferedLine(): String? {
+            val raw = stdoutLineBuf.toByteArray()
+            val nl = raw.indexOf('\n'.code.toByte())
+            if (nl < 0) return null
+            val lineLen = if (nl > 0 && raw[nl - 1] == '\r'.code.toByte()) nl - 1 else nl
+            val line = String(raw, 0, lineLen, Charsets.UTF_8)
+            stdoutLineBuf.reset()
+            if (nl + 1 < raw.size) {
+                stdoutLineBuf.write(raw, nl + 1, raw.size - (nl + 1))
+            }
+            return line
+        }
+
+        override fun close() {
+            if (closed) return
+            closed = true
+            synchronized(writeLock) {
+                runCatching { writeAdbPacket(out, CMD_CLSE, localId, remoteId, ByteArray(0)) }
+                runCatching { socket.close() }
+            }
+        }
+    }
+
+    suspend fun openVirtualDisplayAgentSession(
+        host: String,
+        port: Int,
+        apkPath: String,
+        nativeLibDir: String,
+        transportMode: AdbTransportMode = AdbTransportMode.AUTO
+    ): AdbRawShellSession = withContext(Dispatchers.IO) {
+        require(!apkPath.contains('\'') && !nativeLibDir.contains('\'')) { "Unsafe path characters" }
+        val (privateKey, cert) = loadOrCreateIdentity()
+        val pubKey = cert.publicKey as RSAPublicKey
+        val usePlainTcp = when (transportMode) {
+            AdbTransportMode.PLAIN_TCP -> true
+            AdbTransportMode.TLS -> false
+            AdbTransportMode.AUTO -> port == 5555
+        }
+        val socket: Socket = if (usePlainTcp) {
+            openPlainTcpSocket(host, port, 15_000)
+        } else {
+            openTlsSocket(host, port, privateKey, cert, 15_000)
+        }
+        try {
+            val inp = socket.inputStream
+            val out = socket.outputStream
+            performCnxnHandshake(
+                sock = socket,
+                inp = inp,
+                out = out,
+                privateKey = privateKey,
+                publicKey = pubKey,
+                baseTimeoutMs = 15_000,
+                allowPublicKeyAuth = usePlainTcp
+            )
+            // Keep socket blocking cleanly while reading long-lived agent responses
+            socket.soTimeout = 0
+            val cmd = "CLASSPATH='$apkPath' /system/bin/app_process /system/bin " +
+                "dev.dshn.app.bridge.virtualdisplay.VirtualDisplayAgent --native-lib-dir '$nativeLibDir'"
+            val localId = 1
+            val service = "shell,v2,raw:$cmd\u0000".toByteArray(Charsets.UTF_8)
+            writeAdbPacket(out, CMD_OPEN, localId, 0, service)
+            val openReply = readAdbPacket(inp)
+            if (openReply.command != CMD_OKAY || openReply.arg0 == 0) {
+                throw IllegalStateException("ADB refused virtual display agent stream (cmd=0x${openReply.command.toString(16)})")
+            }
+            AdbRawShellSession(socket, inp, out, localId, openReply.arg0)
+        } catch (t: Throwable) {
+            runCatching { socket.close() }
+            throw t
+        }
+    }
+
     private fun openPlainTcpSocket(host: String, port: Int, timeoutMs: Int): Socket =
         Socket().apply {
             soTimeout = timeoutMs

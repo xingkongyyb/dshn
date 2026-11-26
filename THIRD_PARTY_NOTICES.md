@@ -10,10 +10,10 @@ This repository contains the DSHN Android application source code licensed under
 - **Files**: `app/src/main/jniLibs/arm64-v8a/libbxroot*.so`
 - **Provenance**: Verified release tarball and SHA-256 checksums documented in `vendor/bxroot/PROVENANCE.md` and `vendor/bxroot/SHA256SUMS.txt`.
 
-### DSH Sugar (`profile-resolution` startup optimization)
+### DSH Sugar (`profile-resolution` startup optimization & Android 14+ Virtual Display agent design)
 - **Repository**: https://github.com/xiaoxiao44443/DSH-Sugar
 - **License**: MIT License (`Copyright (c) 2026 xiaoxiao44443 and DSH Sugar contributors`)
-- **Usage**: Idempotent `compileResolution` / `moved.forget` fast-path patch adapted in `EnvManager.patchDshBootResolutionSource`.
+- **Usage**: Idempotent `compileResolution` / `moved.forget` fast-path patch adapted in `EnvManager.patchDshBootResolutionSource`, and Android 14+ `DisplayManager`/`UiAutomation`/`InputManager` virtual display helper architecture adapted in `dev.dshn.app.bridge.virtualdisplay.VirtualDisplayAgent`.
 
 ## 2. Container Rootfs & Prebuilt Runtimes (Distributed Separately / Downloaded at Runtime)
 

@@ -9,6 +9,9 @@ import dev.dshn.app.bridge.DiscoveredAdbEndpoint
 import dev.dshn.app.bridge.DshnAccessibilityService
 import dev.dshn.app.bridge.RootAuthManager
 import dev.dshn.app.bridge.RootAuthState
+import dev.dshn.app.bridge.VirtualDisplayController
+import dev.dshn.app.bridge.VirtualDisplayUiState
+import dev.dshn.app.bridge.VirtualFrameSnapshot
 import dev.dshn.app.bridge.WirelessAdbClient
 import dev.dshn.app.data.AdbTransportMode
 import dev.dshn.app.data.AppSettings
@@ -54,6 +57,7 @@ class DeviceBridgeViewModel(
     private val deviceBridgeServer: DeviceBridgeMcpServer,
     private val adbClient: WirelessAdbClient,
     private val rootAuthManager: RootAuthManager,
+    private val virtualDisplayController: VirtualDisplayController,
     private val auditLogger: AuditLogger,
     private val clipboardHelper: ClipboardHelper,
     private val statusBannerBus: StatusBannerBus
@@ -64,6 +68,8 @@ class DeviceBridgeViewModel(
     val discoveredAdbEndpoints: StateFlow<List<DiscoveredAdbEndpoint>> = adbClient.endpoints
     val adbScanning: StateFlow<Boolean> = adbClient.scanning
     val rootAuthState: StateFlow<RootAuthState> = rootAuthManager.state
+    val virtualDisplayState: StateFlow<VirtualDisplayUiState> = virtualDisplayController.state
+    val virtualDisplayFrame: StateFlow<VirtualFrameSnapshot?> = virtualDisplayController.latestFrame
 
     private val _adbIdentity = MutableStateFlow<AdbIdentitySummary?>(null)
     val adbIdentity: StateFlow<AdbIdentitySummary?> = _adbIdentity.asStateFlow()
@@ -94,13 +100,15 @@ class DeviceBridgeViewModel(
         if (enabled) {
             updateSettings { it.copy(bridgeEnabled = true) }
         } else {
+            viewModelScope.launch { virtualDisplayController.close("Master Device Bridge turned off") }
             updateSettings {
                 it.copy(
                     bridgeEnabled = false,
                     allowAccessibilityRead = false,
                     allowAccessibilityControl = false,
                     allowAdbBridge = false,
-                    allowRootBridge = false
+                    allowRootBridge = false,
+                    allowVirtualDisplay = false
                 )
             }
         }
@@ -166,6 +174,7 @@ class DeviceBridgeViewModel(
         // HostRootShellSession and TerminalViewModel both observe rootAuthManager.state
         // and automatically terminate the root shell / switch back to container Ubuntu.
         rootAuthManager.revokeAuthorization("Locked via Lock All Device Bridge Switches")
+        viewModelScope.launch { virtualDisplayController.close("Locked all Device Bridge switches") }
         updateSettings {
             it.copy(
                 bridgeEnabled = false,
@@ -173,6 +182,7 @@ class DeviceBridgeViewModel(
                 allowAccessibilityControl = false,
                 allowAdbBridge = false,
                 allowRootBridge = false,
+                allowVirtualDisplay = false,
                 requirePerCallConfirmation = true
             )
         }
@@ -380,6 +390,88 @@ class DeviceBridgeViewModel(
         }
     }
 
+    fun openVirtualDisplay(launchPackage: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = virtualDisplayController.open(launchPackage = launchPackage)
+            res.fold(
+                onSuccess = { st ->
+                    runCatching { virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false) }
+                    statusBannerBus.showLocalized(
+                        "后台虚拟屏已启动（Display #${st.displayId} · ${st.driver}）",
+                        "Virtual display started (Display #${st.displayId} · ${st.driver})"
+                    )
+                },
+                onFailure = { err ->
+                    statusBannerBus.showLocalized(
+                        "启动虚拟屏失败：${err.message}",
+                        "Virtual display failed: ${err.message}"
+                    )
+                }
+            )
+            refreshAuditEntries()
+        }
+    }
+
+    fun closeVirtualDisplay() {
+        viewModelScope.launch(Dispatchers.IO) {
+            virtualDisplayController.close("Closed by user")
+            statusBannerBus.showLocalized("后台虚拟屏已关闭", "Virtual display closed")
+            refreshAuditEntries()
+        }
+    }
+
+    fun refreshVirtualDisplayFrame(skipUnchanged: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!virtualDisplayController.state.value.active) return@launch
+            virtualDisplayController.observe(
+                includeTree = false,
+                includeImage = true,
+                quality = 70,
+                maxWidth = 540,
+                skipUnchanged = skipUnchanged
+            )
+        }
+    }
+
+    fun launchAppOnVirtualDisplay(packageName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!virtualDisplayController.state.value.active) {
+                openVirtualDisplay(launchPackage = packageName)
+                return@launch
+            }
+            val res = virtualDisplayController.launchApp(packageName)
+            res.fold(
+                onSuccess = {
+                    virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+                },
+                onFailure = { err ->
+                    statusBannerBus.showLocalized(
+                        "在虚拟屏打开 $packageName 失败：${err.message}",
+                        "Failed to launch $packageName on virtual display: ${err.message}"
+                    )
+                }
+            )
+        }
+    }
+
+    fun tapOnVirtualDisplay(x: Float, y: Float) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!virtualDisplayController.state.value.active) return@launch
+            virtualDisplayController.tap(x, y)
+            kotlinx.coroutines.delay(180)
+            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+        }
+    }
+
+    fun sendVirtualDisplayKey(action: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!virtualDisplayController.state.value.active) return@launch
+            virtualDisplayController.sendKey(action)
+            kotlinx.coroutines.delay(180)
+            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+        }
+    }
+
     fun copyToClipboard(label: String, text: String) {
         clipboardHelper.copy(label, text)
     }
@@ -394,6 +486,7 @@ class DeviceBridgeViewModel(
         private val deviceBridgeServer: DeviceBridgeMcpServer,
         private val adbClient: WirelessAdbClient,
         private val rootAuthManager: RootAuthManager,
+        private val virtualDisplayController: VirtualDisplayController,
         private val auditLogger: AuditLogger,
         private val clipboardHelper: ClipboardHelper,
         private val statusBannerBus: StatusBannerBus
@@ -406,6 +499,7 @@ class DeviceBridgeViewModel(
                 deviceBridgeServer = deviceBridgeServer,
                 adbClient = adbClient,
                 rootAuthManager = rootAuthManager,
+                virtualDisplayController = virtualDisplayController,
                 auditLogger = auditLogger,
                 clipboardHelper = clipboardHelper,
                 statusBannerBus = statusBannerBus

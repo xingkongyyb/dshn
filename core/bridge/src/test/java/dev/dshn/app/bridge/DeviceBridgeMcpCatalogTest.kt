@@ -23,7 +23,9 @@ class DeviceBridgeMcpCatalogTest {
                 "device_global_action",
                 "device_adb_exec",
                 "device_root_status",
-                "device_root_exec"
+                "device_root_exec",
+                "device_virtual_display_open",
+                "device_virtual_display_action"
             ),
             names
         )

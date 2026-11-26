@@ -23,6 +23,14 @@ object DshnNativeCore {
     }
 
     val isAvailable: Boolean = runCatching {
+        val explicitDir = System.getProperty("dshn.native.lib.dir")?.trim().orEmpty()
+        if (explicitDir.isNotEmpty()) {
+            val so = java.io.File(explicitDir, "libdshn_core.so")
+            if (so.isFile) {
+                System.load(so.absolutePath)
+                return@runCatching true
+            }
+        }
         System.loadLibrary("dshn_core")
         true
     }.getOrDefault(false)

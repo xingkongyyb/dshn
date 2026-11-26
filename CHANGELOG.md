@@ -11,6 +11,10 @@
   - Replaces spawning a full Node 24 V8 process (`/opt/node24/bin/node dshn-mcp-relay.mjs`) per ACP session inside `bxroot`.
 - **Release & StagingRelease R8 Build Types**:
   - Enabled `isMinifyEnabled = true`, `isShrinkResources = true`, `proguard-rules.pro`, `androidx.profileinstaller:1.4.1`, parallel/cached Gradle (`-Xmx4g`), and `-PdshnSkipBundledEnv=true` fast-iteration switch.
+- **Android 14+ Background Virtual Display (`VirtualDisplayAgent` + `VirtualDisplayController`)**:
+  - Added privileged `app_process` virtual display helper (MIT-adapted from DSH Sugar) using `DisplayManager.createVirtualDisplay` (`SUPPORTS_TOUCH | TRUSTED | OWN_DISPLAY_GROUP | OWN_FOCUS`), `ImageReader`, `UiAutomation` (`FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES`), and direct Android 14+ `InputManager.injectInputEvent` — bypassing OEM blocks on `overlay_display_devices`.
+  - Connects via either user-authorized Root (`su`) or Wireless ADB (`shell,v2,raw:` stream), and delegates RGBA `DirectByteBuffer` -> JPEG + dirty-frame hashing straight to Rust `libdshn_core.so`.
+  - Added `device_virtual_display_open` / `device_virtual_display_action` MCP tools (plus automatic `display_id` routing in `device_screenshot`/`device_screen_tree`/`device_tap`/`device_swipe`/`device_input`) and an interactive live virtual-screen preview card in `DeviceBridgeScreen`.
 
 ### Changed — Cold-Start, Session & Streaming Performance
 - Adapted MIT-licensed **DSH Sugar** `profile-resolution` fast-path patch into `EnvManager.applyDshProfileResolutionOptimization()` (eliminates ~46% redundant `lstat`/`realpathSync` during DSH boot; unit tested).

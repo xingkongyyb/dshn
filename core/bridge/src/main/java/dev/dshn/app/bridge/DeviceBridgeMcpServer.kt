@@ -62,7 +62,8 @@ class DeviceBridgeMcpServer(
     private val auditLogger: AuditLogger,
     val confirmationBroker: ConfirmationBroker,
     val adbClient: WirelessAdbClient,
-    val rootAuthManager: RootAuthManager
+    val rootAuthManager: RootAuthManager,
+    val virtualDisplayController: VirtualDisplayController? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val rootFilesDir = File(context.filesDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"))
@@ -212,6 +213,22 @@ class DeviceBridgeMcpServer(
             }
 
             "device_screen_tree" -> {
+                val reqDisplayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
+                val vd = virtualDisplayController
+                if (vd != null && vd.isActiveDisplay(reqDisplayId)) {
+                    if (!settings.allowVirtualDisplay) {
+                        return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                    }
+                    val maxNodes = args["max_nodes"]?.jsonPrimitive?.intOrNull?.coerceIn(20, 400) ?: 160
+                    val obs = vd.observe(includeTree = true, includeImage = false, maxNodes = maxNodes)
+                    return obs.fold(
+                        onSuccess = { res ->
+                            auditLogger.log("virtual_display", tool, "auto_allowed", "Read virtual display #$reqDisplayId UI tree")
+                            textResult("<untrusted_screen_content>\n${res["tree"] ?: res}\n</untrusted_screen_content>")
+                        },
+                        onFailure = { textResult("[ERROR] Virtual display tree failed: ${it.message}", isError = true) }
+                    )
+                }
                 if (!settings.allowAccessibilityRead) {
                     return blockedResult(tool, "Accessibility Read toggle is OFF in Settings.")
                 }
@@ -223,12 +240,19 @@ class DeviceBridgeMcpServer(
             }
 
             "device_screenshot" -> {
+                val displayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
+                val vd = virtualDisplayController
+                if (vd != null && vd.isActiveDisplay(displayId)) {
+                    if (!settings.allowVirtualDisplay) {
+                        return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                    }
+                    return captureVirtualDisplayMcpResult(vd, includeTree = false)
+                }
                 if (!settings.allowAccessibilityRead) {
                     return blockedResult(tool, "Accessibility Read toggle is OFF in Settings.")
                 }
                 val acc = DshnAccessibilityService.instance
                     ?: return textResult("[UNAVAILABLE] DSHN Accessibility Service is not enabled on Android Settings.")
-                val displayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
                 val cap = acc.takeScreenshotResult(displayId = displayId, screensDir = screensDir)
                 auditLogger.log("device_bridge", tool, "auto_allowed", "Captured screenshot ${cap.width}x${cap.height}")
                 buildJsonObject {
@@ -252,15 +276,30 @@ class DeviceBridgeMcpServer(
             }
 
             "device_tap" -> {
+                val reqDisplayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
+                val x = args["x"]?.jsonPrimitive?.floatOrNull
+                    ?: return textResult("[INVALID_ARGS] Missing numeric x")
+                val y = args["y"]?.jsonPrimitive?.floatOrNull
+                    ?: return textResult("[INVALID_ARGS] Missing numeric y")
+                val vd = virtualDisplayController
+                if (vd != null && vd.isActiveDisplay(reqDisplayId)) {
+                    if (!settings.allowVirtualDisplay) {
+                        return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                    }
+                    val summary = "Tap virtual display #$reqDisplayId at ($x, $y)"
+                    if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                    val res = vd.tap(x, y)
+                    auditLogger.log("virtual_display", tool, "allowed_once", summary, "ok=${res.isSuccess}")
+                    return res.fold(
+                        onSuccess = { textResult("Tapped virtual display #$reqDisplayId ($x, $y)") },
+                        onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                    )
+                }
                 if (!settings.allowAccessibilityControl) {
                     return blockedResult(tool, "Accessibility Control toggle is OFF in Settings.")
                 }
                 val acc = DshnAccessibilityService.instance
                     ?: return textResult("[UNAVAILABLE] DSHN Accessibility Service is not enabled on Android Settings.")
-                val x = args["x"]?.jsonPrimitive?.floatOrNull
-                    ?: return textResult("[INVALID_ARGS] Missing numeric x")
-                val y = args["y"]?.jsonPrimitive?.floatOrNull
-                    ?: return textResult("[INVALID_ARGS] Missing numeric y")
                 val summary = "Tap screen at ($x, $y)"
                 if (!confirmIfRequired(tool, summary, "Coordinates: ($x, $y)")) {
                     return deniedResult(tool, summary)
@@ -271,16 +310,31 @@ class DeviceBridgeMcpServer(
             }
 
             "device_swipe" -> {
-                if (!settings.allowAccessibilityControl) {
-                    return blockedResult(tool, "Accessibility Control toggle is OFF in Settings.")
-                }
-                val acc = DshnAccessibilityService.instance
-                    ?: return textResult("[UNAVAILABLE] DSHN Accessibility Service is not enabled on Android Settings.")
+                val reqDisplayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
                 val x1 = args["x1"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing x1")
                 val y1 = args["y1"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing y1")
                 val x2 = args["x2"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing x2")
                 val y2 = args["y2"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing y2")
                 val dur = args["duration_ms"]?.jsonPrimitive?.longOrNull ?: 320L
+                val vd = virtualDisplayController
+                if (vd != null && vd.isActiveDisplay(reqDisplayId)) {
+                    if (!settings.allowVirtualDisplay) {
+                        return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                    }
+                    val summary = "Swipe virtual display #$reqDisplayId ($x1,$y1)->($x2,$y2) ${dur}ms"
+                    if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                    val res = vd.swipe(x1, y1, x2, y2, dur.toInt())
+                    auditLogger.log("virtual_display", tool, "allowed_once", summary, "ok=${res.isSuccess}")
+                    return res.fold(
+                        onSuccess = { textResult("Swiped $summary") },
+                        onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                    )
+                }
+                if (!settings.allowAccessibilityControl) {
+                    return blockedResult(tool, "Accessibility Control toggle is OFF in Settings.")
+                }
+                val acc = DshnAccessibilityService.instance
+                    ?: return textResult("[UNAVAILABLE] DSHN Accessibility Service is not enabled on Android Settings.")
                 val summary = "Swipe ($x1,$y1)->($x2,$y2) ${dur}ms"
                 if (!confirmIfRequired(tool, summary, summary)) {
                     return deniedResult(tool, summary)
@@ -291,13 +345,28 @@ class DeviceBridgeMcpServer(
             }
 
             "device_input" -> {
+                val reqDisplayId = args["display_id"]?.jsonPrimitive?.intOrNull ?: Display.DEFAULT_DISPLAY
+                val text = args["text"]?.jsonPrimitive?.contentOrNull
+                    ?: return textResult("[INVALID_ARGS] Missing text")
+                val vd = virtualDisplayController
+                if (vd != null && vd.isActiveDisplay(reqDisplayId)) {
+                    if (!settings.allowVirtualDisplay) {
+                        return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                    }
+                    val summary = "Input text on virtual display #$reqDisplayId (${text.length} chars)"
+                    if (!confirmIfRequired(tool, summary, "Text preview: ${text.take(80)}")) return deniedResult(tool, summary)
+                    val res = vd.inputText(text)
+                    auditLogger.log("virtual_display", tool, "allowed_once", summary, "ok=${res.isSuccess}")
+                    return res.fold(
+                        onSuccess = { textResult("Entered text on virtual display #$reqDisplayId") },
+                        onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                    )
+                }
                 if (!settings.allowAccessibilityControl) {
                     return blockedResult(tool, "Accessibility Control toggle is OFF in Settings.")
                 }
                 val acc = DshnAccessibilityService.instance
                     ?: return textResult("[UNAVAILABLE] DSHN Accessibility Service is not enabled on Android Settings.")
-                val text = args["text"]?.jsonPrimitive?.contentOrNull
-                    ?: return textResult("[INVALID_ARGS] Missing text")
                 val summary = "Input text (${text.length} chars)"
                 if (!confirmIfRequired(tool, summary, "Text preview: ${text.take(80)}")) {
                     return deniedResult(tool, summary)
@@ -305,6 +374,113 @@ class DeviceBridgeMcpServer(
                 val ok = acc.inputText(text)
                 auditLogger.log("device_bridge", tool, "allowed_once", summary, "ok=$ok")
                 textResult(if (ok) "Entered text into focused field" else "No editable field found")
+            }
+
+            "device_virtual_display_open" -> {
+                if (!settings.allowVirtualDisplay) {
+                    return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                }
+                val vd = virtualDisplayController
+                    ?: return textResult("[UNAVAILABLE] Virtual display controller unavailable.", isError = true)
+                val w = args["width"]?.jsonPrimitive?.intOrNull ?: 720
+                val h = args["height"]?.jsonPrimitive?.intOrNull ?: 1280
+                val dpi = args["dpi"]?.jsonPrimitive?.intOrNull ?: 300
+                val pkg = args["package"]?.jsonPrimitive?.contentOrNull
+                val summary = "Open background virtual display (${w}x${h}@${dpi}" +
+                    (if (!pkg.isNullOrBlank()) ", launch $pkg" else "") + ")"
+                if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                val res = vd.open(width = w, height = h, dpi = dpi, launchPackage = pkg)
+                res.fold(
+                    onSuccess = { st ->
+                        textResult(
+                            buildJsonObject {
+                                put("ok", true)
+                                put("display_id", st.displayId)
+                                put("width", st.width)
+                                put("height", st.height)
+                                put("dpi", st.dpi)
+                                put("driver", st.driver)
+                                put("rust_encoder", st.rustEncoder)
+                                put("ui_tree_available", st.uiTreeAvailable)
+                                put("top_component", st.topComponent)
+                            }.toString()
+                        )
+                    },
+                    onFailure = { textResult("[UNAVAILABLE] ${it.message}", isError = true) }
+                )
+            }
+
+            "device_virtual_display_action" -> {
+                if (!settings.allowVirtualDisplay) {
+                    return blockedResult(tool, "Virtual Display toggle is OFF in Settings.")
+                }
+                val vd = virtualDisplayController
+                    ?: return textResult("[UNAVAILABLE] Virtual display controller unavailable.", isError = true)
+                val action = args["action"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase().orEmpty()
+                if (action.isEmpty()) return textResult("[INVALID_ARGS] Missing action (observe|launch|tap|swipe|input|key|close)", isError = true)
+                if (!vd.state.value.active && action != "close") {
+                    return textResult("[UNAVAILABLE] No active virtual display. Call device_virtual_display_open first.", isError = true)
+                }
+                when (action) {
+                    "observe" -> captureVirtualDisplayMcpResult(vd, includeTree = true)
+                    "launch" -> {
+                        val pkg = args["package"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (pkg.isEmpty()) return textResult("[INVALID_ARGS] Missing package", isError = true)
+                        val act = args["activity"]?.jsonPrimitive?.contentOrNull
+                        val summary = "Launch $pkg on virtual display #${vd.state.value.displayId}"
+                        if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                        vd.launchApp(pkg, act).fold(
+                            onSuccess = { textResult(it.toString()) },
+                            onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                        )
+                    }
+                    "tap" -> {
+                        val x = args["x"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing x", isError = true)
+                        val y = args["y"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing y", isError = true)
+                        val summary = "Tap virtual display #${vd.state.value.displayId} at ($x, $y)"
+                        if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                        vd.tap(x, y).fold(
+                            onSuccess = { textResult(it.toString()) },
+                            onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                        )
+                    }
+                    "swipe" -> {
+                        val x1 = args["x1"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing x1", isError = true)
+                        val y1 = args["y1"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing y1", isError = true)
+                        val x2 = args["x2"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing x2", isError = true)
+                        val y2 = args["y2"]?.jsonPrimitive?.floatOrNull ?: return textResult("[INVALID_ARGS] Missing y2", isError = true)
+                        val dur = args["duration_ms"]?.jsonPrimitive?.intOrNull ?: 300
+                        val summary = "Swipe virtual display #${vd.state.value.displayId} ($x1,$y1)->($x2,$y2)"
+                        if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                        vd.swipe(x1, y1, x2, y2, dur).fold(
+                            onSuccess = { textResult(it.toString()) },
+                            onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                        )
+                    }
+                    "input" -> {
+                        val text = args["text"]?.jsonPrimitive?.contentOrNull ?: return textResult("[INVALID_ARGS] Missing text", isError = true)
+                        val summary = "Input text on virtual display #${vd.state.value.displayId} (${text.length} chars)"
+                        if (!confirmIfRequired(tool, summary, "Preview: ${text.take(80)}")) return deniedResult(tool, summary)
+                        vd.inputText(text).fold(
+                            onSuccess = { textResult(it.toString()) },
+                            onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                        )
+                    }
+                    "key" -> {
+                        val key = args["key"]?.jsonPrimitive?.contentOrNull ?: "back"
+                        val summary = "Send key $key to virtual display #${vd.state.value.displayId}"
+                        if (!confirmIfRequired(tool, summary, summary)) return deniedResult(tool, summary)
+                        vd.sendKey(key).fold(
+                            onSuccess = { textResult(it.toString()) },
+                            onFailure = { textResult("[ERROR] ${it.message}", isError = true) }
+                        )
+                    }
+                    "close" -> {
+                        vd.close("Closed via MCP")
+                        textResult("""{"ok":true,"closed":true}""")
+                    }
+                    else -> textResult("[INVALID_ARGS] Unsupported virtual display action: $action", isError = true)
+                }
             }
 
             "device_global_action" -> {
@@ -489,6 +665,46 @@ class DeviceBridgeMcpServer(
         return confirmationBroker.requestConfirmation(tool, summary, detail)
     }
 
+    private suspend fun captureVirtualDisplayMcpResult(
+        vd: VirtualDisplayController,
+        includeTree: Boolean
+    ): JsonObject {
+        val obs = vd.observe(includeTree = includeTree, includeImage = true, skipUnchanged = false)
+        return obs.fold(
+            onSuccess = { res ->
+                val b64 = res["jpeg_base64"]?.jsonPrimitive?.contentOrNull
+                val w = res["image_width"]?.jsonPrimitive?.intOrNull ?: vd.state.value.width
+                val h = res["image_height"]?.jsonPrimitive?.intOrNull ?: vd.state.value.height
+                val enc = res["encoder"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val top = res["top_component"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val treePart = if (includeTree && res["tree"] != null) {
+                    "\n<untrusted_screen_content>\n${res["tree"]}\n</untrusted_screen_content>"
+                } else ""
+                auditLogger.log("virtual_display", "observe", "auto_allowed", "Captured virtual display #${vd.state.value.displayId} ${w}x${h} ($enc)")
+                buildJsonObject {
+                    putJsonArray("content") {
+                        if (!b64.isNullOrEmpty()) {
+                            add(buildJsonObject {
+                                put("type", "image")
+                                put("data", b64)
+                                put("mimeType", "image/jpeg")
+                            })
+                        }
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put(
+                                "text",
+                                "Virtual display #${vd.state.value.displayId} (${w}x${h}, encoder=$enc, top=$top), container path: /run/dshn-bridge/screens/vd_latest.jpg$treePart"
+                            )
+                        })
+                    }
+                    put("isError", false)
+                }
+            },
+            onFailure = { textResult("[ERROR] Virtual display capture failed: ${it.message}", isError = true) }
+        )
+    }
+
     private fun blockedResult(tool: String, reason: String): JsonObject {
         auditLogger.log("device_bridge", tool, "policy_blocked", reason)
         return textResult("[POLICY_BLOCKED] $reason", isError = true)
@@ -532,6 +748,13 @@ class DeviceBridgeMcpServer(
             put("accessibilityConnected", DshnAccessibilityService.connected.value)
             put("rootSuDetected", rootAuthManager.state.value.suBinaryPath != null)
             put("rootAuthorized", rootAuthManager.isAuthorized(settingsStore.current().rootSessionTtlMinutes))
+            val vdState = virtualDisplayController?.state?.value
+            put("virtualDisplaySupported", Build.VERSION.SDK_INT >= 34)
+            put("virtualDisplayActive", vdState?.active == true)
+            if (vdState?.active == true) {
+                put("virtualDisplayId", vdState.displayId)
+                put("virtualDisplayDriver", vdState.driver)
+            }
         }.toString()
     }
 
@@ -616,6 +839,26 @@ class DeviceBridgeMcpServer(
                         put("items", buildJsonObject { put("type", "string") })
                     })
                     put("timeout_sec", buildJsonObject { put("type", "integer") })
+                },
+                tool("device_virtual_display_open", "Open an Android 14+ background virtual display (via Root or Wireless ADB) so the agent can run apps off-screen without disturbing the main display.") {
+                    put("width", buildJsonObject { put("type", "integer") })
+                    put("height", buildJsonObject { put("type", "integer") })
+                    put("dpi", buildJsonObject { put("type", "integer") })
+                    put("package", buildJsonObject { put("type", "string") })
+                },
+                tool("device_virtual_display_action", "Control or observe the active Android 14+ background virtual display (observe, launch, tap, swipe, input, key, close).", listOf("action")) {
+                    put("action", buildJsonObject { put("type", "string") })
+                    put("package", buildJsonObject { put("type", "string") })
+                    put("activity", buildJsonObject { put("type", "string") })
+                    put("x", buildJsonObject { put("type", "number") })
+                    put("y", buildJsonObject { put("type", "number") })
+                    put("x1", buildJsonObject { put("type", "number") })
+                    put("y1", buildJsonObject { put("type", "number") })
+                    put("x2", buildJsonObject { put("type", "number") })
+                    put("y2", buildJsonObject { put("type", "number") })
+                    put("duration_ms", buildJsonObject { put("type", "integer") })
+                    put("text", buildJsonObject { put("type", "string") })
+                    put("key", buildJsonObject { put("type", "string") })
                 }
             )
         )

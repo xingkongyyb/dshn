@@ -7,6 +7,7 @@ import dev.dshn.app.bridge.ConfirmationBroker
 import dev.dshn.app.bridge.DeviceBridgeMcpServer
 import dev.dshn.app.bridge.HostRootShellSession
 import dev.dshn.app.bridge.RootAuthManager
+import dev.dshn.app.bridge.VirtualDisplayController
 import dev.dshn.app.bridge.WirelessAdbClient
 import dev.dshn.app.data.AndroidClipboardHelper
 import dev.dshn.app.data.ClipboardHelper
@@ -50,6 +51,15 @@ class AppContainer(application: Application) {
     val statusBannerBus: StatusBannerBus = StatusBannerBus(settingsStore)
     val clipboardHelper: ClipboardHelper = AndroidClipboardHelper(application, statusBannerBus)
 
+    val virtualDisplayController: VirtualDisplayController = VirtualDisplayController(
+        context = application,
+        scope = appScope,
+        settingsStore = settingsStore,
+        adbClient = adbClient,
+        rootAuthManager = rootAuthManager,
+        auditLogger = auditLogger
+    )
+
     val deviceBridgeServer: DeviceBridgeMcpServer = DeviceBridgeMcpServer(
         context = application,
         scope = appScope,
@@ -57,7 +67,8 @@ class AppContainer(application: Application) {
         auditLogger = auditLogger,
         confirmationBroker = confirmationBroker,
         adbClient = adbClient,
-        rootAuthManager = rootAuthManager
+        rootAuthManager = rootAuthManager,
+        virtualDisplayController = virtualDisplayController
     )
 
     val runtimeController: RuntimeController = RuntimeController(application, appScope)
@@ -135,6 +146,7 @@ class AppContainer(application: Application) {
         deviceBridgeServer = deviceBridgeServer,
         adbClient = adbClient,
         rootAuthManager = rootAuthManager,
+        virtualDisplayController = virtualDisplayController,
         auditLogger = auditLogger,
         clipboardHelper = clipboardHelper,
         statusBannerBus = statusBannerBus
