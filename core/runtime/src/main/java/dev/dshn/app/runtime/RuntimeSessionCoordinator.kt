@@ -14,19 +14,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.util.UUID
 
 /**
@@ -119,6 +126,14 @@ class RuntimeSessionCoordinator(
     private val streamTextBuf = StringBuilder()
     private val streamThinkBuf = StringBuilder()
     private val streamTools = mutableListOf<UiToolCall>()
+    private var streamFlushJob: Job? = null
+    private var streamFlushDirty: Boolean = false
+    private var streamFirstChunkEmitted: Boolean = false
+    private var fastChatActive: Boolean = false
+    private var fastChatHasLocalTurns: Boolean = false
+
+    val nativeFastChatAvailable: Boolean get() = DshnNativeCore.isAvailable
+    val nativeEngineInfo: String get() = DshnNativeCore.engineInfo()
 
     init {
         collectRuntimeStatus()
@@ -225,7 +240,7 @@ class RuntimeSessionCoordinator(
 
     private fun syncActiveStreamingFlag() {
         val activeSid = _activeSessionId.value
-        _streaming.value = activeSid != null && activeSid in streamingSessions
+        _streaming.value = fastChatActive || (activeSid != null && activeSid in streamingSessions)
     }
 
     private fun syncPendingDialogs() {
@@ -244,6 +259,10 @@ class RuntimeSessionCoordinator(
     }
 
     private fun detachCurrentStreamBuffers() {
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        streamFlushDirty = false
+        streamFirstChunkEmitted = false
         currentStreamSessionId = null
         currentAssistantMsgId = null
         streamTextBuf.clear()
@@ -530,14 +549,15 @@ class RuntimeSessionCoordinator(
                     runCatching {
                         runtimeController.startRuntime()
                         waitForHealthyRuntime()
-                        val savedSid = settingsStore.current().selectedSessionId
-                        if (!savedSid.isNullOrBlank()) {
-                            val resumed = runCatching { resumeSessionInternal(savedSid, _activeCwd.value) }.isSuccess
-                            if (!resumed) createSessionInternal(defaultCwd())
-                        } else {
-                            createSessionInternal(defaultCwd())
-                        }
                         refreshSessions()
+                        val savedSid = settingsStore.current().selectedSessionId
+                        val preserveFastChat = fastChatActive || fastChatHasLocalTurns
+                        if (!savedSid.isNullOrBlank() && !preserveFastChat) {
+                            val resumed = runCatching { resumeSessionInternal(savedSid, _activeCwd.value) }.isSuccess
+                            if (!resumed) createSessionInternal(defaultCwd(), preserveVisibleMessages = false)
+                        } else {
+                            createSessionInternal(defaultCwd(), preserveVisibleMessages = preserveFastChat)
+                        }
                     }.onFailure {
                         banner(t("运行环境启动失败：${it.message}", "Runtime startup failed: ${it.message}"), BannerAction.OPEN_LOGS)
                     }
@@ -602,14 +622,20 @@ class RuntimeSessionCoordinator(
     }
 
     private suspend fun waitForHealthyRuntime() {
-        val deadline = System.currentTimeMillis() + 35_000L
-        while (System.currentTimeMillis() < deadline) {
-            val st = runtimeStatus.value.state
-            if (st == RuntimeLifecycleState.HEALTHY || st == RuntimeLifecycleState.DEGRADED) return
-            if (st == RuntimeLifecycleState.ERROR) error(runtimeStatus.value.detail)
-            delay(250)
+        val finalStatus = runCatching {
+            withTimeout(35_000L) {
+                runtimeStatus.first { st ->
+                    st.state == RuntimeLifecycleState.HEALTHY ||
+                        st.state == RuntimeLifecycleState.DEGRADED ||
+                        st.state == RuntimeLifecycleState.ERROR
+                }
+            }
+        }.getOrElse {
+            error(t("等待 DSH 初始化超时", "Timed out waiting for DSH ACP initialization"))
         }
-        error(t("等待 DSH 初始化超时", "Timed out waiting for DSH ACP initialization"))
+        if (finalStatus.state == RuntimeLifecycleState.ERROR) {
+            error(finalStatus.detail)
+        }
     }
 
     private fun defaultCwd(): String = settingsStore.current().defaultCwd.trim().ifEmpty { "/root" }
@@ -655,7 +681,7 @@ class RuntimeSessionCoordinator(
         }
     }
 
-    private suspend fun createSessionInternal(cwd: String) {
+    private suspend fun createSessionInternal(cwd: String, preserveVisibleMessages: Boolean = false) {
         val res = runtimeController.newSession(cwd)
         val sid = res["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         check(sid.isNotBlank()) { "Empty sessionId from session/new" }
@@ -664,7 +690,14 @@ class RuntimeSessionCoordinator(
                 json.decodeFromJsonElement(ListSerializer(AcpConfigOption.serializer()), el)
             }
         }.getOrNull().orEmpty()
-        detachCurrentStreamBuffers()
+        if (!preserveVisibleMessages) {
+            fastChatHasLocalTurns = false
+            detachCurrentStreamBuffers()
+            _messages.value = emptyList()
+            _usageUsed.value = 0L
+            _usageSize.value = 0L
+            lastSubmittedPromptText = null
+        }
         _activeSessionId.value = sid
         _activeCwd.value = cwd
         _activeSessionReadOnly.value = false
@@ -672,10 +705,6 @@ class RuntimeSessionCoordinator(
         attachedRestartCount = runtimeStatus.value.restartCount
         _interruptedTurnBanner.value = null
         _configOptions.value = cfg
-        _messages.value = emptyList()
-        _usageUsed.value = 0L
-        _usageSize.value = 0L
-        lastSubmittedPromptText = null
         syncActiveStreamingFlag()
         syncPendingDialogs()
         settingsStore.update { it.copy(selectedSessionId = sid) }
@@ -954,6 +983,15 @@ class RuntimeSessionCoordinator(
     fun sendPromptOrCommand(input: String, appendUserBubble: Boolean = true): Boolean {
         val trimmed = input.trim()
         if (trimmed.isEmpty() || _streaming.value || _activeSessionReadOnly.value) return false
+
+        val acpReady = isRuntimeUsable() &&
+            !_sessionBusy.value &&
+            _sessionAttached.value &&
+            !_activeSessionId.value.isNullOrBlank()
+        if (!acpReady && !trimmed.startsWith("/") && settingsStore.hasApiKey.value && DshnNativeCore.isAvailable) {
+            return sendFastChatPrompt(trimmed, appendUserBubble)
+        }
+
         if (_sessionBusy.value) {
             banner(t("正在加载对话，请稍候再发送…", "The chat is still loading, please send again in a moment…"))
             return false
@@ -1033,6 +1071,10 @@ class RuntimeSessionCoordinator(
         streamTextBuf.clear()
         streamThinkBuf.clear()
         streamTools.clear()
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        streamFlushDirty = false
+        streamFirstChunkEmitted = false
         syncActiveStreamingFlag()
         appendMessage(UiChatMessage(assistantId, "assistant", isStreaming = true))
 
@@ -1077,7 +1119,146 @@ class RuntimeSessionCoordinator(
         }
     }
 
+    private fun resolveDirectApiModel(settings: dev.dshn.app.data.AppSettings): String {
+        val customBase = settings.deepseekBaseUrl?.trim().orEmpty()
+        val rawModel = settings.selectedModel.trim()
+        val isCustomHost = customBase.isNotEmpty() && !customBase.contains("api.deepseek.com", ignoreCase = true)
+        if (isCustomHost && rawModel.isNotEmpty() && !rawModel.equals("deepseek-flash", ignoreCase = true)) {
+            return rawModel
+        }
+        val wantReasoner = rawModel.contains("reasoner", ignoreCase = true) ||
+            settings.reasoningEffort.equals("high", ignoreCase = true) ||
+            settings.reasoningEffort.equals("max", ignoreCase = true)
+        return if (wantReasoner) "deepseek-reasoner" else "deepseek-chat"
+    }
+
+    /**
+     * Streams a turn directly via Rust `libdshn_core.so` (rustls + zero-copy SSE) so the user can
+     * chat in ~0.4 s without waiting for Ubuntu/Node/DSH container cold start.
+     */
+    private fun sendFastChatPrompt(trimmed: String, appendUserBubble: Boolean): Boolean {
+        _interruptedTurnBanner.value = null
+        lastSubmittedPromptText = trimmed
+        if (appendUserBubble) {
+            appendMessage(UiChatMessage("user-${UUID.randomUUID()}", "user", trimmed))
+        }
+
+        val historySnapshot = _messages.value
+            .filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
+            .takeLast(16)
+
+        val assistantId = "fast-asst-${UUID.randomUUID()}"
+        fastChatActive = true
+        fastChatHasLocalTurns = true
+        currentStreamSessionId = null
+        currentAssistantMsgId = assistantId
+        streamTextBuf.clear()
+        streamThinkBuf.clear()
+        streamTools.clear()
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        streamFlushDirty = false
+        streamFirstChunkEmitted = false
+        syncActiveStreamingFlag()
+        appendMessage(UiChatMessage(assistantId, "assistant", isStreaming = true))
+
+        val settings = settingsStore.current()
+        val baseUrl = settings.deepseekBaseUrl?.trim()?.trimEnd('/')?.ifEmpty { null }
+            ?: "https://api.deepseek.com"
+        val endpointUrl = if (baseUrl.endsWith("/chat/completions")) baseUrl else "$baseUrl/chat/completions"
+        val model = resolveDirectApiModel(settings)
+
+        val payloadJson = buildJsonObject {
+            put("model", model)
+            put("stream", true)
+            putJsonObject("stream_options") { put("include_usage", true) }
+            putJsonArray("messages") {
+                for (msg in historySnapshot) {
+                    addJsonObject {
+                        put("role", msg.role)
+                        put("content", msg.text)
+                    }
+                }
+            }
+        }.toString()
+
+        scope.launch(Dispatchers.IO) {
+            val apiKey = runCatching { settingsStore.getApiKey() }.getOrNull().orEmpty()
+            if (apiKey.isBlank()) {
+                withContext(Dispatchers.Main.immediate) {
+                    fastChatActive = false
+                    finalizeStreamingMessage()
+                    appendSystemMessage(t("未读取到 API Key", "API key unavailable"), isError = true)
+                }
+                return@launch
+            }
+            DshnNativeCore.runFastChatStream(
+                endpointUrl = endpointUrl,
+                apiKey = apiKey,
+                requestBodyJson = payloadJson,
+                callback = object : DshnNativeCore.FastChatCallback {
+                    override fun onTextDelta(chunk: String) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            if (currentAssistantMsgId == assistantId) {
+                                streamTextBuf.append(chunk)
+                                scheduleStreamingAssistantSync()
+                            }
+                        }
+                    }
+
+                    override fun onReasoningDelta(chunk: String) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            if (currentAssistantMsgId == assistantId) {
+                                streamThinkBuf.append(chunk)
+                                scheduleStreamingAssistantSync()
+                            }
+                        }
+                    }
+
+                    override fun onUsage(promptTokens: Long, completionTokens: Long, totalTokens: Long) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            _usageUsed.value = totalTokens
+                        }
+                    }
+
+                    override fun onDone(finishReason: String) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            fastChatActive = false
+                            if (currentAssistantMsgId == assistantId) {
+                                finalizeStreamingMessage()
+                            } else {
+                                syncActiveStreamingFlag()
+                            }
+                            if (finishReason == "cancelled") {
+                                appendSystemMessage(t("已停止生成", "Generation stopped"))
+                            }
+                        }
+                    }
+
+                    override fun onError(message: String) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            fastChatActive = false
+                            if (currentAssistantMsgId == assistantId) {
+                                finalizeStreamingMessage()
+                            } else {
+                                syncActiveStreamingFlag()
+                            }
+                            val errText = t("极速直连出错：$message", "Rust fast-chat error: $message")
+                            _interruptedTurnBanner.value = errText
+                            appendSystemMessage(errText, isError = true)
+                        }
+                    }
+                }
+            )
+        }
+        return true
+    }
+
     fun cancelActivePrompt() {
+        if (fastChatActive) {
+            DshnNativeCore.cancelFastChat()
+            return
+        }
         val sid = _activeSessionId.value ?: return
         if (!isRuntimeUsable()) {
             streamingSessions.remove(sid)
@@ -1146,16 +1327,20 @@ class RuntimeSessionCoordinator(
             streamTextBuf.clear()
             streamThinkBuf.clear()
             streamTools.clear()
+            streamFlushJob?.cancel()
+            streamFlushJob = null
+            streamFlushDirty = false
+            streamFirstChunkEmitted = false
             appendMessage(UiChatMessage(assistantId, "assistant", isStreaming = true))
         }
         when (type) {
             "agent_message_chunk" -> {
                 streamTextBuf.append(u["text"]?.jsonPrimitive?.contentOrNull.orEmpty())
-                syncStreamingAssistantMessage()
+                scheduleStreamingAssistantSync()
             }
             "agent_thought_chunk" -> {
                 streamThinkBuf.append(u["text"]?.jsonPrimitive?.contentOrNull.orEmpty())
-                syncStreamingAssistantMessage()
+                scheduleStreamingAssistantSync()
             }
             "tool_call" -> {
                 val id = u["toolCallId"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -1165,7 +1350,7 @@ class RuntimeSessionCoordinator(
                 val idx = streamTools.indexOfFirst { it.toolCallId == id }
                 val tc = UiToolCall(id, title, status, inputSummary = rawIn)
                 if (idx >= 0) streamTools[idx] = tc else streamTools.add(tc)
-                syncStreamingAssistantMessage()
+                flushStreamingAssistantMessageNow()
             }
             "tool_call_update" -> {
                 val id = u["toolCallId"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -1195,7 +1380,7 @@ class RuntimeSessionCoordinator(
                         )
                     )
                 }
-                syncStreamingAssistantMessage()
+                flushStreamingAssistantMessageNow()
             }
             "usage_update" -> {
                 _usageUsed.value = u["used"]?.jsonPrimitive?.longOrNull ?: _usageUsed.value
@@ -1217,6 +1402,34 @@ class RuntimeSessionCoordinator(
         return if (s.length <= 2400) s else s.take(2400) + "..."
     }
 
+    /**
+     * Emits the very first streaming chunk immediately (0 ms TTFT penalty) and coalesces
+     * rapid subsequent token bursts on a 40 ms window to avoid O(N) String + List allocations per token.
+     */
+    private fun scheduleStreamingAssistantSync() {
+        if (!streamFirstChunkEmitted) {
+            streamFirstChunkEmitted = true
+            flushStreamingAssistantMessageNow()
+            return
+        }
+        streamFlushDirty = true
+        if (streamFlushJob?.isActive == true) return
+        streamFlushJob = scope.launch {
+            delay(40)
+            if (streamFlushDirty) {
+                streamFlushDirty = false
+                syncStreamingAssistantMessage()
+            }
+        }
+    }
+
+    private fun flushStreamingAssistantMessageNow() {
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        streamFlushDirty = false
+        syncStreamingAssistantMessage()
+    }
+
     private fun syncStreamingAssistantMessage() {
         val msgId = currentAssistantMsgId ?: return
         val updated = UiChatMessage(
@@ -1231,6 +1444,13 @@ class RuntimeSessionCoordinator(
     }
 
     private fun finalizeStreamingMessage() {
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        if (streamFlushDirty && currentAssistantMsgId != null) {
+            streamFlushDirty = false
+            syncStreamingAssistantMessage()
+        }
+        streamFirstChunkEmitted = false
         val msgId = currentAssistantMsgId
         currentStreamSessionId = null
         currentAssistantMsgId = null

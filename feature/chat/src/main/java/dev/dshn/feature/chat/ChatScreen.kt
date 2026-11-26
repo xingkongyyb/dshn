@@ -115,7 +115,8 @@ fun ChatScreen(
         ?: tr("新对话", "New chat")
 
     val usable = runtimeStatus.state == RuntimeLifecycleState.HEALTHY || runtimeStatus.state == RuntimeLifecycleState.DEGRADED
-    val canChat = hasApiKey && usable && sessionId != null && sessionAttached && !readOnly && !sessionBusy
+    val fastChatReady = hasApiKey && !readOnly && !usable && vm.nativeFastChatAvailable
+    val canChat = (hasApiKey && usable && sessionId != null && sessionAttached && !readOnly && !sessionBusy) || fastChatReady
 
     fun closeDrawer() = scope.launch { drawerState.close() }
 
@@ -175,6 +176,7 @@ fun ChatScreen(
                             streaming = streaming,
                             sessionBusy = sessionBusy,
                             hasApiKey = hasApiKey,
+                            fastChatReady = fastChatReady,
                             configOptions = configOptions
                         )
                     },
@@ -318,11 +320,16 @@ private fun ChatTitle(
     streaming: Boolean,
     sessionBusy: Boolean,
     hasApiKey: Boolean,
+    fastChatReady: Boolean,
     configOptions: List<AcpConfigOption>
 ) {
     val (stateText, tone) = when {
         !hasApiKey -> tr("未设置 API Key", "No API key") to PillTone.WARNING
         streaming -> tr("正在回复…", "Responding…") to PillTone.INFO
+        fastChatReady && runtimeState == RuntimeLifecycleState.STARTING ->
+            tr("极速直连就绪 · 容器启动中", "Fast chat ready · starting container") to PillTone.SUCCESS
+        fastChatReady ->
+            tr("极速直连就绪", "Fast chat ready") to PillTone.SUCCESS
         sessionBusy -> tr("正在加载…", "Loading…") to PillTone.INFO
         else -> runtimeStateLabel(runtimeState)
     }

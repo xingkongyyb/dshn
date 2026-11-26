@@ -288,13 +288,15 @@ class RuntimeSupervisor(
     private suspend fun waitForBridgePing(timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         var lastErr: String? = null
+        var backoffMs = 30L
         while (System.currentTimeMillis() < deadline) {
             val res = bridgeClient.pingResult(timeoutMs = 1_500)
             if (res.getOrDefault(false)) {
                 return true
             }
             res.exceptionOrNull()?.message?.let { lastErr = it }
-            delay(350)
+            delay(backoffMs)
+            backoffMs = (backoffMs * 2L).coerceAtMost(200L)
         }
         if (lastErr != null) {
             appendLog("[bridge] ping error: $lastErr")
@@ -441,14 +443,32 @@ class RuntimeSupervisor(
         pendingPermissions.clear()
     }
 
-    private fun deviceBridgeMcpConfig(): List<McpServerConfig> = listOf(
-        McpServerConfig.Stdio(
-            name = "dshn-device-bridge",
-            command = "/opt/node24/bin/node",
-            args = listOf("/opt/dshn/dshn-mcp-relay.mjs"),
-            env = mapOf("DSHN_DEVICE_MCP_SOCK" to "/run/dshn-bridge/device-mcp.sock")
-        )
-    )
+    private fun deviceBridgeMcpConfig(): List<McpServerConfig> {
+        // On-demand MCP attachment: skip spawning a relay process per session when Device Bridge is disabled.
+        if (!settingsStore.current().bridgeEnabled) {
+            return emptyList()
+        }
+        val nativeRelay = File(launcher.rootfs, "opt/dshn/dshn-mcp-relay")
+        return if (nativeRelay.isFile && nativeRelay.canExecute()) {
+            listOf(
+                McpServerConfig.Stdio(
+                    name = "dshn-device-bridge",
+                    command = "/opt/dshn/dshn-mcp-relay",
+                    args = emptyList(),
+                    env = mapOf("DSHN_DEVICE_MCP_SOCK" to "/run/dshn-bridge/device-mcp.sock")
+                )
+            )
+        } else {
+            listOf(
+                McpServerConfig.Stdio(
+                    name = "dshn-device-bridge",
+                    command = "/opt/node24/bin/node",
+                    args = listOf("/opt/dshn/dshn-mcp-relay.mjs"),
+                    env = mapOf("DSHN_DEVICE_MCP_SOCK" to "/run/dshn-bridge/device-mcp.sock")
+                )
+            )
+        }
+    }
 
     suspend fun newSession(cwd: String): String {
         val c = requireHealthyClient()

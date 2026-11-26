@@ -1,0 +1,10 @@
+[package]
+name = "dshn-mcp-relay"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Tiny zero-dependency static ARM64 stdio <-> Unix Domain Socket relay replacing Node 24 dshn-mcp-relay.mjs"
+
+[[bin]]
+name = "dshn-mcp-relay"
+path = "src/main.rs"

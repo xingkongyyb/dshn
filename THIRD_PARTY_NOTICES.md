@@ -10,6 +10,11 @@ This repository contains the DSHN Android application source code licensed under
 - **Files**: `app/src/main/jniLibs/arm64-v8a/libbxroot*.so`
 - **Provenance**: Verified release tarball and SHA-256 checksums documented in `vendor/bxroot/PROVENANCE.md` and `vendor/bxroot/SHA256SUMS.txt`.
 
+### DSH Sugar (`profile-resolution` startup optimization)
+- **Repository**: https://github.com/xiaoxiao44443/DSH-Sugar
+- **License**: MIT License (`Copyright (c) 2026 xiaoxiao44443 and DSH Sugar contributors`)
+- **Usage**: Idempotent `compileResolution` / `moved.forget` fast-path patch adapted in `EnvManager.patchDshBootResolutionSource`.
+
 ## 2. Container Rootfs & Prebuilt Runtimes (Distributed Separately / Downloaded at Runtime)
 
 DSHN runs inside a user-space **Ubuntu 24.04.5 LTS (Noble Numbat)** ARM64 container rootfs together with **Node.js v24** and `@deepseek-ai/dsh`.

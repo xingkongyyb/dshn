@@ -35,19 +35,21 @@ object TarGzExtractor {
     }
 
     object DefaultPosixFsOps : PosixFsOps {
-        private val osClass: Class<*>? = runCatching { Class.forName("android.system.Os") }.getOrNull()
-        private val osSymlink = runCatching {
-            osClass?.getMethod("symlink", String::class.java, String::class.java)
-        }.getOrNull()
-        private val osChmod = runCatching {
-            osClass?.getMethod("chmod", String::class.java, Int::class.javaPrimitiveType)
-        }.getOrNull()
+        private val androidOsSupported: Boolean = runCatching {
+            android.system.Os.getpid()
+            true
+        }.getOrDefault(false)
 
         override fun symlink(target: String, linkFile: File) {
             deleteQuietlyNoFollow(linkFile)
-            val viaOs = osSymlink?.let { m ->
-                runCatching { m.invoke(null, target, linkFile.absolutePath) }.isSuccess
-            } ?: false
+            val viaOs = if (androidOsSupported) {
+                runCatching {
+                    android.system.Os.symlink(target, linkFile.absolutePath)
+                    true
+                }.getOrDefault(false)
+            } else {
+                false
+            }
             if (!viaOs) {
                 Files.createSymbolicLink(linkFile.toPath(), Paths.get(target))
             }
@@ -55,9 +57,14 @@ object TarGzExtractor {
 
         override fun chmod(file: File, mode: Int) {
             val clean = mode and 0x1FF
-            val viaOs = osChmod?.let { m ->
-                runCatching { m.invoke(null, file.absolutePath, clean) }.isSuccess
-            } ?: false
+            val viaOs = if (androidOsSupported) {
+                runCatching {
+                    android.system.Os.chmod(file.absolutePath, clean)
+                    true
+                }.getOrDefault(false)
+            } else {
+                false
+            }
             if (!viaOs) {
                 file.setReadable((clean and 0x100) != 0, (clean and 0x044) == 0)
                 file.setWritable((clean and 0x080) != 0, (clean and 0x022) == 0)
@@ -96,7 +103,9 @@ object TarGzExtractor {
         var symlinks = 0
         var hardlinks = 0
         val deferredHardlinks = mutableListOf<DeferredHardlink>()
-        val ioBuf = ByteArray(64 * 1024)
+        val ensuredDirs = HashSet<String>(4096)
+        ensuredDirs.add(destDir.absolutePath)
+        val ioBuf = ByteArray(128 * 1024)
         var lastReportBytes = 0L
 
         digestStream.use { countedRaw ->
@@ -185,12 +194,13 @@ object TarGzExtractor {
                                     targetFile.mkdirs()
                                     val dirMode = (if (headerMode > 0) headerMode else 0x1ED) or 0x1C0
                                     posixOps.chmod(targetFile, dirMode)
+                                    ensuredDirs.add(targetFile.absolutePath)
                                 }
                             }
                             entries++
                         }
                         '0', '\u0000' -> {
-                            ensureWritableParent(targetFile.parentFile, posixOps)
+                            ensureWritableParent(targetFile.parentFile, posixOps, ensuredDirs)
                             deleteQuietlyNoFollow(targetFile)
                             FileOutputStream(targetFile).use { out ->
                                 copyExact(tarIn, out, entrySize, ioBuf)
@@ -205,7 +215,7 @@ object TarGzExtractor {
                             skipFully(tarIn, entrySize)
                             skipPadding(tarIn, entrySize)
                             if (targetFile != destDir) {
-                                ensureWritableParent(targetFile.parentFile, posixOps)
+                                ensureWritableParent(targetFile.parentFile, posixOps, ensuredDirs)
                                 posixOps.symlink(entryLinkName, targetFile)
                                 entries++
                                 symlinks++
@@ -219,7 +229,7 @@ object TarGzExtractor {
                                 val srcFile = File(destDir, linkRel)
                                 val fileMode = (if (headerMode > 0) headerMode else 0x1A4) or 0x180
                                 if (srcFile.exists() && !Files.isSymbolicLink(srcFile.toPath())) {
-                                    copyHardlinkTarget(srcFile, targetFile, fileMode, posixOps, ioBuf)
+                                    copyHardlinkTarget(srcFile, targetFile, fileMode, posixOps, ioBuf, ensuredDirs)
                                     entries++
                                     hardlinks++
                                 } else {
@@ -252,7 +262,7 @@ object TarGzExtractor {
 
         for (hl in deferredHardlinks) {
             if (hl.sourcePath.exists()) {
-                copyHardlinkTarget(hl.sourcePath, hl.targetPath, hl.mode, posixOps, ioBuf)
+                copyHardlinkTarget(hl.sourcePath, hl.targetPath, hl.mode, posixOps, ioBuf, ensuredDirs)
                 entries++
                 hardlinks++
             }
@@ -279,9 +289,10 @@ object TarGzExtractor {
         dst: File,
         mode: Int,
         posixOps: PosixFsOps,
-        buf: ByteArray
+        buf: ByteArray,
+        ensuredDirs: HashSet<String>
     ) {
-        ensureWritableParent(dst.parentFile, posixOps)
+        ensureWritableParent(dst.parentFile, posixOps, ensuredDirs)
         deleteQuietlyNoFollow(dst)
         src.inputStream().use { input ->
             FileOutputStream(dst).use { out ->
@@ -295,8 +306,10 @@ object TarGzExtractor {
         posixOps.chmod(dst, mode)
     }
 
-    private fun ensureWritableParent(dir: File?, posixOps: PosixFsOps) {
+    private fun ensureWritableParent(dir: File?, posixOps: PosixFsOps, ensuredDirs: HashSet<String>) {
         if (dir == null) return
+        val key = dir.absolutePath
+        if (ensuredDirs.contains(key)) return
         if (!dir.exists()) {
             dir.mkdirs()
         }
@@ -304,6 +317,7 @@ object TarGzExtractor {
             if (!dir.canWrite() || !dir.canExecute()) {
                 posixOps.chmod(dir, 0x1ED) // 0755
             }
+            ensuredDirs.add(key)
         }
     }
 

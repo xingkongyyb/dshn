@@ -233,6 +233,44 @@ class EnvManagerTest {
         assertTrue(File(env.rootfs, "root/.dsh/sessions/existing.jsonl").exists())
     }
 
+    @Test
+    fun patchesDshBootProfileResolutionIdempotently() {
+        val sample = """
+            function prefixes(path) {
+            	const configured = resolve(path) + sep;
+            	const canonical = canonicalPath(path) + sep;
+            	return canonical === configured ? [configured] : [configured, canonical];
+            }
+            function compileResolution(resolution) {
+            	return {
+            		entries: new Map(resolution.entries.map((entry) => [entry.name, {
+            			...entry,
+            			realDir: canonicalPath(entry.packageDir)
+            		}])),
+            		profilesDir: resolution.profilesDir,
+            		profileDir: resolution.profileDir,
+            		profilePaths: prefixes(resolution.profilesDir),
+            		profile: resolution.profileDir === void 0 ? [] : prefixes(resolution.profileDir),
+            		installationPaths: [...new Set(resolution.entries.filter((entry) => entry.scope === "installation").flatMap((entry) => prefixes(entry.packageDir)))],
+            		linkedPaths: resolution.linkedRoots.flatMap((root) => prefixes(root.realPath))
+            	};
+            }
+            function refresh() {
+            		const current = [];
+            		for (const entry of next.entries.values()) current.push(entry.realDir);
+            		for (const root of successor.linkedRoots) current.push(root.realPath);
+            		this.moved.forget(current);
+            }
+        """.trimIndent()
+        val patched = EnvManager.patchDshBootResolutionSource(sample)
+        assertTrue(patched != null)
+        assertTrue(patched!!.contains("dshn-profile-resolution-opt-v1"))
+        assertTrue(patched.contains("const linked = resolution.linkedRoots.length !== 0;"))
+        assertTrue(patched.contains("if (this.moved.targets.size !== 0)"))
+        // Second call must be a no-op (idempotent)
+        assertEquals(null, EnvManager.patchDshBootResolutionSource(patched))
+    }
+
     private fun sha256(data: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
 

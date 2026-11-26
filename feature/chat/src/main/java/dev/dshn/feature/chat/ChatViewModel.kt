@@ -44,6 +44,8 @@ class ChatViewModel(
     val sessionsAwaitingInput: StateFlow<Set<String>> = runtimeSessionCoordinator.sessionsAwaitingInput
     val envManifest: StateFlow<EnvManifest> = environmentCoordinator.envManifest
     val envInstallProgress: StateFlow<EnvInstallProgress> = environmentCoordinator.envInstallProgress
+    val nativeFastChatAvailable: Boolean get() = runtimeSessionCoordinator.nativeFastChatAvailable
+    val nativeEngineInfo: String get() = runtimeSessionCoordinator.nativeEngineInfo
 
     fun refreshSessions() = runtimeSessionCoordinator.refreshSessions()
 

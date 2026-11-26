@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.dshn.app.runtime.DshnNativeCore
 import dev.dshn.core.ui.BrandMark
 import dev.dshn.core.ui.PillTone
 import dev.dshn.core.ui.SecondaryScaffold
@@ -60,6 +61,8 @@ fun AboutScreen(
                     AboutRow("DSH", manifest.dshVersion.ifBlank { tr("未安装", "Not installed") })
                     SettingsDivider(indent = 16.dp)
                     AboutRow("Node.js", manifest.nodeVersion.ifBlank { "—" })
+                    SettingsDivider(indent = 16.dp)
+                    AboutRow(tr("原生加速引擎", "Native Rust core"), DshnNativeCore.engineInfo())
                     SettingsDivider(indent = 16.dp)
                     AboutRow(tr("容器运行时", "Container runtime"), "bxroot v0.2.5")
                     SettingsDivider(indent = 16.dp)

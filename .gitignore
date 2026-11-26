@@ -5,6 +5,7 @@ local.properties
 *.keystore
 *.jks
 .cxx/
+rust/target/
 vendor/rootfs/*.tar*
 vendor/rootfs/*.img
 vendor/rootfs/*.zst

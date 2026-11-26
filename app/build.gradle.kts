@@ -5,6 +5,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val skipBundledEnv = providers.gradleProperty("dshnSkipBundledEnv").map { it.equals("true", ignoreCase = true) }.getOrElse(false)
+
 android {
     namespace = "dev.dshn.app"
     compileSdk = 36
@@ -14,9 +16,25 @@ android {
         applicationId = "dev.dshn.app"
         minSdk = 30
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.4.0-perf"
         ndk { abiFilters += "arm64-v8a" }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        create("stagingRelease") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     buildFeatures {
@@ -28,7 +46,10 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("gz", "tgz", "bin")
+        noCompress += listOf("gz", "tgz", "zst", "bin")
+        if (skipBundledEnv) {
+            ignoreAssetsPattern = "!*.bin:!bundle-manifest.json:!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+        }
     }
 
     compileOptions {
@@ -61,6 +82,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0-perf (2026-11-26, feat/rust-perf-engine)
+
+### Added — Rust Native Core (`rust/dshn-core` & `rust/dshn-mcp-relay`)
+- **Native Rust JNI Engine (`libdshn_core.so`, 16 KB page-aligned AArch64)**:
+  - Single-pass streaming `.tar.gz` (`flate2`/`zlib-rs` SIMD) and `.tar.zst` (`ruzstd`) archive extractor with hardware SHA-256 verification, parent-directory deduplication cache, and direct POSIX `chmod`/`symlink`, reading uncompressed APK `.bin` slices zero-copy directly from `base.apk`.
+  - Native Rust TLS + zero-copy SSE **Instant Fast-Chat** client (`DshnNativeCore.runFastChatStream` via `ureq` + `rustls` + `ring` ARMv8 crypto), enabling ~0.4 s cold-start chat before Ubuntu/Node/DSH finishes booting.
+  - Zero-copy RGBA `DirectByteBuffer` -> FNV-1a dirty-frame skip -> SIMD JPEG encoder (`DshnNativeCore.encodeVirtualFrame`) for Android 14+ Virtual Display preview & screenshots.
+- **Static Rust MCP UDS Relay (`libdshn_mcp_relay.so`, `aarch64-unknown-linux-musl`, 390 KB)**:
+  - Replaces spawning a full Node 24 V8 process (`/opt/node24/bin/node dshn-mcp-relay.mjs`) per ACP session inside `bxroot`.
+- **Release & StagingRelease R8 Build Types**:
+  - Enabled `isMinifyEnabled = true`, `isShrinkResources = true`, `proguard-rules.pro`, `androidx.profileinstaller:1.4.1`, parallel/cached Gradle (`-Xmx4g`), and `-PdshnSkipBundledEnv=true` fast-iteration switch.
+
+### Changed — Cold-Start, Session & Streaming Performance
+- Adapted MIT-licensed **DSH Sugar** `profile-resolution` fast-path patch into `EnvManager.applyDshProfileResolutionOptimization()` (eliminates ~46% redundant `lstat`/`realpathSync` during DSH boot; unit tested).
+- Enabled Node 24 persistent V8 compile cache (`NODE_COMPILE_CACHE=/root/.cache/dshn-v8`) in `ContainerLauncher` with automatic zero-byte `pwritev` self-heal guard.
+- Made Device Bridge MCP attachment on-demand (`RuntimeSupervisor`: skip mounting relay when `bridgeEnabled == false`).
+- Moved `AppContainer` / `EnvironmentCoordinator` / `ContainerLauncher` / `EnvManager` disk & socket initialization off the UI main thread; eliminated redundant `fsync` when runtime assets are unchanged.
+- Replaced `250 ms` polling in `waitForHealthyRuntime()` with zero-latency `StateFlow.first`, stepped `waitForBridgePing()` backoff (`30 -> 200 ms`), parallelized `refreshSessions()`, and added `40 ms` coalesced streaming token updates (0 ms TTFT penalty).
+- Replaced reflection-based `android.system.Os` calls in `TarGzExtractor` with direct Android SDK calls + parent-directory deduplication cache.
+
 ## Unreleased (aistudio-refactor, 2026-11-24)
 
 ### Changed — Architecture

@@ -116,14 +116,27 @@ class EnvManager(
     private val commandRunner: ((String, Array<String>) -> ContainerLauncher.Result)? = null,
     private val longCommandRunner: ((String, Array<String>, Long) -> ContainerLauncher.Result)? = null,
     private val assetStreamOpener: ((String) -> InputStream)? = null,
-    private val posixOps: TarGzExtractor.PosixFsOps = TarGzExtractor.DefaultPosixFsOps
+    private val posixOps: TarGzExtractor.PosixFsOps = TarGzExtractor.DefaultPosixFsOps,
+    private val assetApkSliceOpener: ((String) -> Triple<String, Long, Long>?)? = null,
+    private val nativeLibDir: File? = null
 ) {
     constructor(context: Context, launcher: ContainerLauncher = ContainerLauncher(context)) : this(
         filesDir = context.filesDir,
         assetOpener = { assetPath -> context.assets.open(assetPath).use { it.readBytes() } },
         commandRunner = { exe, args -> launcher.runCapture(exe, *args, timeoutSec = 25) },
         longCommandRunner = { exe, args, timeoutSec -> launcher.runCapture(exe, *args, timeoutSec = timeoutSec) },
-        assetStreamOpener = { assetPath -> context.assets.open(assetPath) }
+        assetStreamOpener = { assetPath -> context.assets.open(assetPath) },
+        assetApkSliceOpener = { assetPath ->
+            try {
+                val apkPath = context.applicationInfo.sourceDir
+                context.assets.openFd(assetPath).use { afd ->
+                    Triple(apkPath, afd.startOffset, afd.declaredLength)
+                }
+            } catch (_: Throwable) {
+                null
+            }
+        },
+        nativeLibDir = launcher.nativeLibDir
     )
 
     private fun openAssetStream(assetPath: String): InputStream? {
@@ -198,31 +211,63 @@ class EnvManager(
 
                 val targetDir = if (archive.targetSubdir.isBlank()) staging else File(staging, archive.targetSubdir)
                 targetDir.mkdirs()
-                val stream = openAssetStream(archive.assetPath)
-                    ?: error("Missing bundled archive asset: ${archive.assetPath}")
 
-                val stats = TarGzExtractor.extract(
-                    gzipStream = stream,
-                    destDir = targetDir,
-                    stripComponents = archive.stripComponents,
-                    expectedSha256 = archive.sha256.ifBlank { null },
-                    posixOps = posixOps,
-                    onProgress = { archiveBytes, archiveEntries ->
-                        val curDone = (completedArchiveBytes + archiveBytes).coerceAtMost(totalBytes)
-                        onProgress(
-                            EnvInstallProgress(
-                                inProgress = true,
-                                stageIndex = idx + 1,
-                                stageCount = totalStages,
-                                stageLabelZh = archive.labelZh,
-                                stageLabelEn = archive.labelEn,
-                                bytesDone = curDone,
-                                totalBytes = totalBytes,
-                                entriesExtracted = totalEntries + archiveEntries
-                            )
+                val progressReporter: (Long, Int) -> Unit = { archiveBytes, archiveEntries ->
+                    val curDone = (completedArchiveBytes + archiveBytes).coerceAtMost(totalBytes)
+                    onProgress(
+                        EnvInstallProgress(
+                            inProgress = true,
+                            stageIndex = idx + 1,
+                            stageCount = totalStages,
+                            stageLabelZh = archive.labelZh,
+                            stageLabelEn = archive.labelEn,
+                            bytesDone = curDone,
+                            totalBytes = totalBytes,
+                            entriesExtracted = totalEntries + archiveEntries
                         )
-                    }
-                )
+                    )
+                }
+
+                val isZstd = archive.assetPath.endsWith(".zst", ignoreCase = true) ||
+                    archive.assetPath.endsWith(".zst.bin", ignoreCase = true)
+                val apkSlice = if (DshnNativeCore.isAvailable) assetApkSliceOpener?.invoke(archive.assetPath) else null
+                val stats = if (apkSlice != null) {
+                    val (apkPath, startOffset, declaredLen) = apkSlice
+                    val nativeJson = DshnNativeCore.extractTarFile(
+                        archivePath = apkPath,
+                        offsetBytes = startOffset,
+                        lengthBytes = declaredLen,
+                        destDir = targetDir.absolutePath,
+                        stripComponents = archive.stripComponents,
+                        expectedSha256 = archive.sha256.ifBlank { null },
+                        isZstd = isZstd,
+                        callback = object : DshnNativeCore.ExtractProgressCallback {
+                            override fun onProgress(compressedBytesRead: Long, entriesExtracted: Int) {
+                                progressReporter(compressedBytesRead, entriesExtracted)
+                            }
+                        }
+                    )
+                    val obj = json.parseToJsonElement(nativeJson).jsonObject
+                    TarGzExtractor.ExtractStats(
+                        entriesExtracted = obj["entries"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                        filesExtracted = obj["files"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                        symlinksCreated = obj["symlinks"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                        hardlinksCopied = obj["hardlinks"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                        compressedBytesRead = obj["bytes"]?.jsonPrimitive?.content?.toLongOrNull() ?: declaredLen,
+                        sha256Hex = obj["sha256"]?.jsonPrimitive?.content.orEmpty()
+                    )
+                } else {
+                    val stream = openAssetStream(archive.assetPath)
+                        ?: error("Missing bundled archive asset: ${archive.assetPath}")
+                    TarGzExtractor.extract(
+                        gzipStream = stream,
+                        destDir = targetDir,
+                        stripComponents = archive.stripComponents,
+                        expectedSha256 = archive.sha256.ifBlank { null },
+                        posixOps = posixOps,
+                        onProgress = progressReporter
+                    )
+                }
                 completedArchiveBytes += if (archive.sizeBytes > 0L) archive.sizeBytes else stats.compressedBytesRead
                 totalEntries += stats.entriesExtracted
             }
@@ -356,16 +401,27 @@ class EnvManager(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
     private val rootFilesDir = File(filesDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"))
     val rootfs: File = File(rootFilesDir, "linux/ubuntu")
-    val envDir: File = File(rootFilesDir, "env").apply { mkdirs() }
-    val snapshotsDir: File = File(envDir, "snapshots").apply { mkdirs() }
+    val envDir: File = File(rootFilesDir, "env")
+    val snapshotsDir: File = File(envDir, "snapshots")
     private val manifestFile = File(envDir, "env-manifest.json")
     private val dshStateDir = File(rootfs, "root/.dsh")
 
-    init {
-        recoverInterruptedTransaction()
+    @Volatile
+    private var envInitialized: Boolean = false
+
+    private fun ensureEnvInitialized() {
+        if (envInitialized) return
+        synchronized(this) {
+            if (envInitialized) return
+            envDir.mkdirs()
+            snapshotsDir.mkdirs()
+            envInitialized = true
+            recoverInterruptedTransaction()
+        }
     }
 
     fun loadManifest(): EnvManifest {
+        ensureEnvInitialized()
         if (!manifestFile.exists()) return EnvManifest(rootfsReady = isRootfsReady())
         return runCatching {
             json.decodeFromString<EnvManifest>(manifestFile.readText(Charsets.UTF_8))
@@ -375,24 +431,27 @@ class EnvManager(
     fun isRootfsReady(): Boolean = File(rootfs, "bin/sh").exists() && File(rootfs, "opt/node24/bin/node").exists()
 
     fun ensureRuntimeAssets(): EnvManifest {
+        ensureEnvInitialized()
         val current = loadManifest()
         if (!isRootfsReady()) {
             val updated = current.copy(rootfsReady = false)
-            saveManifest(updated)
+            if (current.rootfsReady || !manifestFile.exists()) saveManifest(updated)
             return updated
         }
 
         val optDshn = File(rootfs, "opt/dshn").apply { mkdirs() }
         val opener = assetOpener
         val digest = MessageDigest.getInstance("SHA-256")
+        var anyFileChanged = false
         if (opener != null) {
             for ((assetName, executable) in BUNDLED_ASSETS) {
                 val bytes = opener("dshn/$assetName")
                 digest.update(assetName.toByteArray(Charsets.UTF_8))
                 digest.update(bytes)
                 val target = File(optDshn, assetName)
-                if (!target.exists() || !target.readBytes().contentEquals(bytes)) {
+                if (!target.exists() || target.length() != bytes.size.toLong() || !target.readBytes().contentEquals(bytes)) {
                     writeFsyncAtomic(target, bytes)
+                    anyFileChanged = true
                 }
                 if (executable) {
                     target.setExecutable(true, false)
@@ -403,19 +462,72 @@ class EnvManager(
                 }
             }
         }
+        // Stage static Rust MCP UDS relay binary inside container opt/dshn/ if bundled in jniLibs
+        val nativeRelaySrc = nativeLibDir?.let { File(it, "libdshn_mcp_relay.so") }
+        if (nativeRelaySrc != null && nativeRelaySrc.isFile) {
+            val nativeRelayDst = File(optDshn, "dshn-mcp-relay")
+            if (!nativeRelayDst.exists() || nativeRelayDst.length() != nativeRelaySrc.length()) {
+                writeFsyncAtomic(nativeRelayDst, nativeRelaySrc.readBytes())
+                anyFileChanged = true
+            }
+            nativeRelayDst.setExecutable(true, false)
+            nativeRelayDst.setReadable(true, false)
+            digest.update("dshn-mcp-relay".toByteArray(Charsets.UTF_8))
+            digest.update(nativeRelaySrc.length().toString().toByteArray(Charsets.UTF_8))
+        }
+
         ensureResolvConf()
+        val patchedDsh = applyDshProfileResolutionOptimization(rootfs)
         val bundleHash = digest.digest().joinToString("") { "%02x".format(it) }
         val dshPkgVer = readDshPackageVersion()
         val nodePkgVer = readNodePackageVersion()
+        val nextDshVer = dshPkgVer.ifEmpty { current.dshVersion }
+        val nextNodeVer = nodePkgVer.ifEmpty { current.nodeVersion }
+        val unchanged = current.rootfsReady &&
+            current.assetBundleHash == bundleHash &&
+            current.dshVersion == nextDshVer &&
+            current.nodeVersion == nextNodeVer &&
+            !anyFileChanged &&
+            !patchedDsh &&
+            manifestFile.exists()
+        if (unchanged) {
+            return current
+        }
         val updated = current.copy(
             assetBundleHash = bundleHash,
-            dshVersion = dshPkgVer.ifEmpty { current.dshVersion },
-            nodeVersion = nodePkgVer.ifEmpty { current.nodeVersion },
+            dshVersion = nextDshVer,
+            nodeVersion = nextNodeVer,
             rootfsReady = true,
             lastSyncedEpochMs = System.currentTimeMillis()
         )
         saveManifest(updated)
         return updated
+    }
+
+    /**
+     * Applies the MIT-licensed DSH Sugar `profile-resolution` startup optimization to
+     * `@deepseek-ai/dsh-app-boot` (`index.js` and `profile-resolution-bootstrap.js`).
+     * Eliminates ~46% of redundant `lstat`/`realpathSync` calls across installed packages on boot.
+     * Safe and idempotent: leaves files untouched if already patched or if upstream layout differs.
+     */
+    internal fun applyDshProfileResolutionOptimization(targetRootfs: File): Boolean {
+        val candidates = listOf(
+            "opt/node24/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js",
+            "opt/node24/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js",
+            "opt/node24/lib/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js",
+            "opt/node24/lib/node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js"
+        )
+        var modifiedAny = false
+        for (rel in candidates) {
+            val file = File(targetRootfs, rel)
+            if (!file.isFile) continue
+            val original = runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: continue
+            if (original.contains(PROFILE_RES_OPT_MARKER)) continue
+            val patched = patchDshBootResolutionSource(original) ?: continue
+            writeFsyncAtomic(file, patched.toByteArray(Charsets.UTF_8))
+            modifiedAny = true
+        }
+        return modifiedAny
     }
 
     fun readNodePackageVersion(): String {
@@ -443,6 +555,7 @@ class EnvManager(
     }
 
     fun createSnapshot(label: String = "manual"): Result<EnvSnapshotInfo> = runCatching {
+        ensureEnvInitialized()
         recoverInterruptedTransaction()
         if (!dshStateDir.exists()) dshStateDir.mkdirs()
 
@@ -472,6 +585,7 @@ class EnvManager(
     }
 
     fun listSnapshots(): List<EnvSnapshotInfo> {
+        ensureEnvInitialized()
         val dirs = snapshotsDir.listFiles() ?: return emptyList()
         return dirs.mapNotNull { dir ->
             if (!dir.isDirectory || dir.name.endsWith(".staging")) return@mapNotNull null
@@ -488,6 +602,7 @@ class EnvManager(
      * and two-phase rename + crash recovery journal in env-manifest.json.
      */
     fun restoreSnapshot(snapshotId: String): Result<EnvSnapshotInfo> = runCatching {
+        ensureEnvInitialized()
         recoverInterruptedTransaction()
         val snapDir = File(snapshotsDir, snapshotId)
         val snapData = File(snapDir, "dsh-data")
@@ -781,6 +896,62 @@ class EnvManager(
         const val MAX_SUPPORTED_SESSION_FORMAT_VERSION = 10
         const val REQUIRED_ALLOW_SCRIPTS =
             "@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs"
+        private const val PROFILE_RES_OPT_MARKER = "/* dshn-profile-resolution-opt-v1 */"
+
+        /**
+         * Pure transformation implementing DSH Sugar's MIT `profile-resolution.patch`.
+         * Returns the patched source text or `null` if the target pattern is not present.
+         */
+        internal fun patchDshBootResolutionSource(src: String): String? {
+            if (src.contains(PROFILE_RES_OPT_MARKER)) return null
+            val targetHunk1 = """function prefixes(path) {
+	const configured = resolve(path) + sep;
+	const canonical = canonicalPath(path) + sep;
+	return canonical === configured ? [configured] : [configured, canonical];
+}
+function compileResolution(resolution) {
+	return {
+		entries: new Map(resolution.entries.map((entry) => [entry.name, {
+			...entry,
+			realDir: canonicalPath(entry.packageDir)
+		}])),
+		profilesDir: resolution.profilesDir,
+		profileDir: resolution.profileDir,
+		profilePaths: prefixes(resolution.profilesDir),
+		profile: resolution.profileDir === void 0 ? [] : prefixes(resolution.profileDir),
+		installationPaths: [...new Set(resolution.entries.filter((entry) => entry.scope === "installation").flatMap((entry) => prefixes(entry.packageDir)))],"""
+            val replacementHunk1 = """$PROFILE_RES_OPT_MARKER
+function prefixes(path, realDir = canonicalPath(path)) {
+	const configured = resolve(path) + sep;
+	const canonical = realDir + sep;
+	return canonical === configured ? [configured] : [configured, canonical];
+}
+function compileResolution(resolution) {
+	const linked = resolution.linkedRoots.length !== 0;
+	const entries = resolution.entries.map((entry) => ({
+		...entry,
+		realDir: entry.scope === "installation" && !linked ? void 0 : canonicalPath(entry.packageDir)
+	}));
+	return {
+		entries: new Map(entries.map((entry) => [entry.name, entry])),
+		profilesDir: resolution.profilesDir,
+		profileDir: resolution.profileDir,
+		profilePaths: prefixes(resolution.profilesDir),
+		profile: resolution.profileDir === void 0 ? [] : prefixes(resolution.profileDir),
+		installationPaths: linked ? [...new Set(entries.filter((entry) => entry.scope === "installation").flatMap((entry) => prefixes(entry.packageDir, entry.realDir)))] : [],"""
+            val targetHunk2 = """		const current = [];
+		for (const entry of next.entries.values()) current.push(entry.realDir);
+		for (const root of successor.linkedRoots) current.push(root.realPath);
+		this.moved.forget(current);"""
+            val replacementHunk2 = """		if (this.moved.targets.size !== 0) {
+			const current = [];
+			for (const entry of next.entries.values()) current.push(entry.realDir ?? canonicalPath(entry.packageDir));
+			for (const root of successor.linkedRoots) current.push(root.realPath);
+			this.moved.forget(current);
+		}"""
+            if (!src.contains(targetHunk1) || !src.contains(targetHunk2)) return null
+            return src.replaceFirst(targetHunk1, replacementHunk1).replaceFirst(targetHunk2, replacementHunk2)
+        }
 
         private val BUNDLED_ASSETS = listOf(
             "dshn-bridge.patch.yml" to false,

@@ -43,10 +43,10 @@ class EnvironmentCoordinator(
 ) {
     private val envInstallRunning = AtomicBoolean(false)
 
-    private val _envManifest = MutableStateFlow(envManager.loadManifest())
+    private val _envManifest = MutableStateFlow(EnvManifest())
     val envManifest: StateFlow<EnvManifest> = _envManifest.asStateFlow()
 
-    private val _bundledEnvManifest = MutableStateFlow(envManager.loadBundledManifest())
+    private val _bundledEnvManifest = MutableStateFlow<BundledEnvManifest?>(null)
     val bundledEnvManifest: StateFlow<BundledEnvManifest?> = _bundledEnvManifest.asStateFlow()
 
     private val _envInstallProgress = MutableStateFlow(EnvInstallProgress())
@@ -55,7 +55,7 @@ class EnvironmentCoordinator(
     private val _envChecking = MutableStateFlow(false)
     val envChecking: StateFlow<Boolean> = _envChecking.asStateFlow()
 
-    private val _snapshots = MutableStateFlow(envManager.listSnapshots())
+    private val _snapshots = MutableStateFlow<List<EnvSnapshotInfo>>(emptyList())
     val snapshots: StateFlow<List<EnvSnapshotInfo>> = _snapshots.asStateFlow()
 
     private val _selfTestReport = MutableStateFlow<SelfTestReport?>(null)
@@ -110,9 +110,14 @@ class EnvironmentCoordinator(
     }
 
     suspend fun initializeOnStartup(setupRequired: Boolean) {
+        val bundled = _bundledEnvManifest.value ?: envManager.loadBundledManifest().also {
+            _bundledEnvManifest.value = it
+        }
         val currentManifest = envManager.ensureRuntimeAssets()
         _envManifest.value = currentManifest
-        val bundled = _bundledEnvManifest.value
+        scope.launch(Dispatchers.IO) {
+            _snapshots.value = envManager.listSnapshots()
+        }
         val needsBundledInstall = bundled != null && (
             !envManager.isRootfsReady() ||
                 (currentManifest.bundledEnvVersion.isNotBlank() && currentManifest.bundledEnvVersion != bundled.bundleVersion)

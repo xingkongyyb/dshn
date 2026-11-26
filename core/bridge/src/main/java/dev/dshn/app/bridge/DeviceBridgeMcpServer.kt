@@ -66,12 +66,7 @@ class DeviceBridgeMcpServer(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val rootFilesDir = File(context.filesDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"))
-    private val bridgeDir = File(rootFilesDir, "bridge").apply {
-        if (!exists()) mkdirs()
-        setReadable(false, false); setReadable(true, true)
-        setWritable(false, false); setWritable(true, true)
-        setExecutable(false, false); setExecutable(true, true)
-    }
+    private val bridgeDir = File(rootFilesDir, "bridge")
     private val sockFile = File(bridgeDir, "device-mcp.sock")
     private val screensDir = File(bridgeDir, "screens")
 
@@ -82,6 +77,10 @@ class DeviceBridgeMcpServer(
     fun start() {
         if (acceptJob?.isActive == true) return
         acceptJob = scope.launch(Dispatchers.IO) {
+            if (!bridgeDir.exists()) bridgeDir.mkdirs()
+            bridgeDir.setReadable(false, false); bridgeDir.setReadable(true, true)
+            bridgeDir.setWritable(false, false); bridgeDir.setWritable(true, true)
+            bridgeDir.setExecutable(false, false); bridgeDir.setExecutable(true, true)
             if (sockFile.exists()) sockFile.delete()
             val ls = LocalSocket(LocalSocket.SOCKET_STREAM)
             try {

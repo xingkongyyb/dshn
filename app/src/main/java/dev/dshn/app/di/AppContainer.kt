@@ -165,10 +165,10 @@ class AppContainer(application: Application) {
     init {
         val initialSetupRequired = resolveInitialSetupRequired()
 
-        deviceBridgeServer.start()
         runtimeController.bind()
 
         appScope.launch(Dispatchers.IO) {
+            runCatching { deviceBridgeServer.start() }
             runCatching { rootAuthManager.probeEnvironment(settingsStore.current().customSuBinaryPath) }
             runtimeSessionCoordinator.refreshApiKeyMaskSync()
             environmentCoordinator.initializeOnStartup(setupRequired = initialSetupRequired)

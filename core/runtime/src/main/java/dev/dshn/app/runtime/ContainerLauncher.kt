@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
  */
 class ContainerLauncher(private val context: Context) {
 
-    private val nativeLibDir: File = File(context.applicationInfo.nativeLibraryDir)
+    val nativeLibDir: File = File(context.applicationInfo.nativeLibraryDir)
     private val launcher: File = File(nativeLibDir, "libbxroot.so")
 
     val rootFilesDir: File = File(
@@ -20,14 +20,43 @@ class ContainerLauncher(private val context: Context) {
     )
 
     val rootfs: File = File(rootFilesDir, "linux/ubuntu")
-    val bridgeDir: File = File(rootFilesDir, "bridge").apply {
-        if (!exists()) mkdirs()
-        setReadable(false, false); setReadable(true, true)
-        setWritable(false, false); setWritable(true, true)
-        setExecutable(false, false); setExecutable(true, true)
+    val bridgeDir: File = File(rootFilesDir, "bridge")
+    private val tmpDir: File = File(context.cacheDir, "bxroot-tmp")
+
+    @Volatile
+    private var dirsPrepared: Boolean = false
+
+    fun ensureDirs() {
+        if (dirsPrepared) return
+        synchronized(this) {
+            if (dirsPrepared) return
+            if (!bridgeDir.exists()) bridgeDir.mkdirs()
+            bridgeDir.setReadable(false, false); bridgeDir.setReadable(true, true)
+            bridgeDir.setWritable(false, false); bridgeDir.setWritable(true, true)
+            bridgeDir.setExecutable(false, false); bridgeDir.setExecutable(true, true)
+            if (!tmpDir.exists()) tmpDir.mkdirs()
+            dirsPrepared = true
+        }
     }
 
-    private val tmpDir: File = File(context.cacheDir, "bxroot-tmp").apply { mkdirs() }
+    /**
+     * Checks whether Node 24's persistent V8 compile cache can be enabled safely.
+     * Guards against the `pwritev` zero-byte cache file pitfall documented by DSH Sugar:
+     * if a prior run produced >= 5 cache files and ALL of them are 0 bytes, disable the cache.
+     */
+    private fun resolveNodeCompileCacheDir(): String? {
+        val cacheDir = File(rootfs, "root/.cache/dshn-v8")
+        if (cacheDir.exists() && cacheDir.isDirectory) {
+            val files = cacheDir.listFiles()?.filter { it.isFile } ?: emptyList()
+            if (files.size >= 5 && files.all { it.length() == 0L }) {
+                Log.w(TAG, "Disabling NODE_COMPILE_CACHE: detected ${files.size} zero-byte cache files")
+                return null
+            }
+        } else {
+            runCatching { cacheDir.mkdirs() }
+        }
+        return "/root/.cache/dshn-v8"
+    }
 
     private fun binds(extraWorkspaceBind: String? = null): List<String> = buildList {
         add("/dev:/dev")
@@ -111,6 +140,12 @@ class ContainerLauncher(private val context: Context) {
             val cur = this["NODE_OPTIONS"].orEmpty().trim()
             put("NODE_OPTIONS", if (cur.contains(flag)) cur else "$flag $cur".trim())
         }
+
+        if (!containsKey("NODE_COMPILE_CACHE") && !containsKey("NODE_DISABLE_COMPILE_CACHE")) {
+            resolveNodeCompileCacheDir()?.let { cachePath ->
+                put("NODE_COMPILE_CACHE", cachePath)
+            }
+        }
     }
 
     fun start(
@@ -124,6 +159,7 @@ class ContainerLauncher(private val context: Context) {
         webSearchProvider: String? = null,
         extraEnv: Map<String, String> = emptyMap()
     ): Process {
+        ensureDirs()
         val cmd = command(guestExe, args.toList(), cwd = cwd, extraWorkspaceBind = extraWorkspaceBind)
         val pb = ProcessBuilder(cmd)
         pb.environment().putAll(
