@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.4.0-perf (2026-11-26, feat/rust-perf-engine)
+## 0.4.0-perf (2026-11-27, feat/rust-perf-engine)
+
+### Added — DSH Plugins Management, Interactive Context Inspector & Cleaner Model Picker
+- **DSH Plugin Management (`PluginsScreen`, Drawer + Settings → Agent → Plugins)**:
+  - Restored native plugin management backed by DSH `0.2.2-rc.5`'s `ctx.get("pluginManager")` service over `dshn-session-bridge.mjs` (`plugins.list`, `plugins.setEnabled`, `plugins.install`, `plugins.remove`, `plugins.installPnpm`).
+  - Supports toggling all shipped official optional bundles offline, installing/removing external npm or GitHub bundles (`dsh plugin --profile acp add <spec>`), one-tap container `pnpm` bootstrap when absent, and a restart-runtime banner when ACP HMR is disabled.
+- **Interactive Context Inspector Popup (`ContextInspectorMenu`, Chat Composer)**:
+  - Tapping the composer's circular context percentage indicator opens a compact popup (matching `ModelPickerMenu`) showing live context window usage, token breakdown (`systemTokens` / `toolsTokens` / `messageTokens`), **prompt cache hit rate** (`cacheReadTokens / (uncachedInputTokens + cacheReadTokens + cacheWriteTokens)`, plus last-turn hit rate), expandable **System Prompt** sections & dynamic runtime contexts (with one-tap copy), registered **Tools** (built-in & MCP badges), and discovered **Skills**.
+- **Cleaner Model Picker (`ModelPickerMenu`)**:
+  - Removed verbose multi-line English model descriptions under model titles in `ModelList` for a cleaner single-line model selection menu.
 
 ### Added — Rust Native Core (`rust/dshn-core` & `rust/dshn-mcp-relay`)
 - **Native Rust JNI Engine (`libdshn_core.so`, 16 KB page-aligned AArch64)**:

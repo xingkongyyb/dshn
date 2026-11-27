@@ -19,7 +19,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.dshn.app.acp.AcpConfigOption
+import dev.dshn.app.runtime.ContextInspectSnapshot
 import dev.dshn.app.runtime.RuntimeLifecycleState
 import dev.dshn.app.runtime.SlashCommandDescriptor
 import dev.dshn.core.ui.LocalDshnColors
@@ -121,9 +121,15 @@ internal fun Composer(
     canSend: Boolean,
     streaming: Boolean,
     readOnly: Boolean,
+    sessionAttached: Boolean,
     configOptions: List<AcpConfigOption>,
     usageUsed: Long,
     usageSize: Long,
+    contextInspect: ContextInspectSnapshot?,
+    contextInspectLoading: Boolean,
+    contextInspectError: String?,
+    onInspectContext: () -> Unit,
+    onCopy: (label: String, text: String) -> Unit,
     onSetOption: SetConfigOption,
     configKey: Any?,
     onSend: () -> Unit,
@@ -188,8 +194,18 @@ internal fun Composer(
                     }
                 }
                 Spacer(Modifier.width(6.dp))
-                if (!readOnly && usageSize > 0) {
-                    ContextUsage(usageUsed, usageSize)
+                if (!readOnly && (usageSize > 0L || sessionAttached)) {
+                    key(configKey) {
+                        ContextUsageMenuChip(
+                            used = usageUsed,
+                            size = usageSize,
+                            snapshot = contextInspect,
+                            loading = contextInspectLoading,
+                            error = contextInspectError,
+                            onInspect = onInspectContext,
+                            onCopy = onCopy
+                        )
+                    }
                     Spacer(Modifier.width(6.dp))
                 }
                 val sendEnabled = streaming || canSend
@@ -213,26 +229,5 @@ internal fun Composer(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ContextUsage(used: Long, size: Long) {
-    val fraction = (used.toFloat() / size.toFloat()).coerceIn(0f, 1f)
-    val color = when {
-        fraction > 0.85f -> MaterialTheme.colorScheme.error
-        fraction > 0.6f -> LocalDshnColors.current.warning
-        else -> MaterialTheme.colorScheme.primary
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(
-            progress = { fraction },
-            modifier = Modifier.size(18.dp),
-            strokeWidth = 2.5.dp,
-            color = color,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-        Spacer(Modifier.width(4.dp))
-        Text("${(fraction * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

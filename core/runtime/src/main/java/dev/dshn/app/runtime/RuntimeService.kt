@@ -100,6 +100,36 @@ class RuntimeService : Service(), RuntimeEventSink {
                 supervisor.executeCommandFromBridge(sessionId.orEmpty(), line.orEmpty())
             }
 
+        override fun inspectContextFromBridge(sessionId: String?): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.inspectContextFromBridge(sessionId)
+            }
+
+        override fun listPluginsFromBridge(locale: String?): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.listPluginsFromBridge(locale.orEmpty().ifBlank { "zh-CN" })
+            }
+
+        override fun setPluginEnabledFromBridge(name: String?, enabled: Boolean): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.setPluginEnabledFromBridge(name.orEmpty(), enabled)
+            }
+
+        override fun installPluginFromBridge(spec: String?, enabled: Boolean): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.installPluginFromBridge(spec.orEmpty(), enabled)
+            }
+
+        override fun removePluginFromBridge(name: String?): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.removePluginFromBridge(name.orEmpty())
+            }
+
+        override fun installPnpmFromBridge(): String =
+            runBlocking(Dispatchers.IO) {
+                supervisor.installPnpmFromBridge()
+            }
+
         override fun sendPrompt(requestId: String?, sessionId: String?, text: String?) {
             supervisor.sendPromptAsync(requestId.orEmpty(), sessionId.orEmpty(), text.orEmpty())
         }

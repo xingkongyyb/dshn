@@ -22,6 +22,9 @@ data object SettingsModelRoute
 data object SettingsPermissionRoute
 
 @Serializable
+data object SettingsPluginsRoute
+
+@Serializable
 data object SettingsBackgroundRoute
 
 @Serializable
@@ -56,6 +59,7 @@ fun NavGraphBuilder.settingsGraph(
                 onBack = onBack,
                 onOpenModel = { navController.navigate(SettingsModelRoute) { launchSingleTop = true } },
                 onOpenPermission = { navController.navigate(SettingsPermissionRoute) { launchSingleTop = true } },
+                onOpenPlugins = { navController.navigate(SettingsPluginsRoute) { launchSingleTop = true } },
                 onOpenDeviceBridge = onOpenDeviceBridge,
                 onOpenTerminal = onOpenTerminal,
                 onOpenBackground = { navController.navigate(SettingsBackgroundRoute) { launchSingleTop = true } },
@@ -86,6 +90,17 @@ fun NavGraphBuilder.settingsGraph(
                 factory = settingsFactory
             )
             PermissionSettingsScreen(vm = vm, onBack = onBack)
+        }
+
+        composable<SettingsPluginsRoute> { entry ->
+            val graphOwner = remember(entry) {
+                runCatching { navController.getBackStackEntry<SettingsGraph>() }.getOrDefault(entry)
+            }
+            val vm: SettingsViewModel = viewModel(
+                viewModelStoreOwner = graphOwner,
+                factory = settingsFactory
+            )
+            PluginsScreen(vm = vm, onBack = onBack)
         }
 
         composable<SettingsBackgroundRoute> { entry ->

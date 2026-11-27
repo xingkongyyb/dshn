@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.DeveloperBoard
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Language
@@ -83,6 +84,7 @@ fun SettingsHomeScreen(
     onBack: () -> Unit,
     onOpenModel: () -> Unit,
     onOpenPermission: () -> Unit,
+    onOpenPlugins: () -> Unit,
     onOpenDeviceBridge: () -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenBackground: () -> Unit,
@@ -179,6 +181,13 @@ fun SettingsHomeScreen(
                         icon = Icons.Rounded.Security,
                         subtitle = tierLabel(settings.permissionMode) + " · " + settings.defaultCwd,
                         onClick = onOpenPermission
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        tr("插件管理", "Plugins"),
+                        icon = Icons.Rounded.Extension,
+                        subtitle = tr("管理 DSH 内置与第三方插件", "Manage bundled & external DSH plugins"),
+                        onClick = onOpenPlugins
                     )
                 }
             }

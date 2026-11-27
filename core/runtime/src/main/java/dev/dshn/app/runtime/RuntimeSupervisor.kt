@@ -560,6 +560,36 @@ class RuntimeSupervisor(
         return res.toString()
     }
 
+    suspend fun inspectContextFromBridge(sessionId: String?): String {
+        val obj = bridgeClient.inspectContextJson(sessionId)
+        return LargePayloadXfer.encode(ipcXferDir, "ctxinspect", obj.toString())
+    }
+
+    suspend fun listPluginsFromBridge(locale: String): String {
+        val obj = bridgeClient.listPluginsJson(locale)
+        return LargePayloadXfer.encode(ipcXferDir, "plugins", obj.toString())
+    }
+
+    suspend fun setPluginEnabledFromBridge(name: String, enabled: Boolean): String {
+        val res = bridgeClient.setPluginEnabledJson(name, enabled)
+        return res.toString()
+    }
+
+    suspend fun installPluginFromBridge(spec: String, enabled: Boolean): String {
+        val res = bridgeClient.installPluginJson(spec, enabled)
+        return res.toString()
+    }
+
+    suspend fun removePluginFromBridge(name: String): String {
+        val res = bridgeClient.removePluginJson(name)
+        return res.toString()
+    }
+
+    suspend fun installPnpmFromBridge(): String {
+        val res = bridgeClient.installPnpmJson()
+        return res.toString()
+    }
+
     suspend fun replyQuestion(requestId: String, answersJson: String, cancelled: Boolean) {
         val answers = if (cancelled || answersJson.isBlank()) {
             emptyList()

@@ -377,7 +377,7 @@ private fun ModelList(
             val selected = choice.value == option.currentValue
             ChoiceRow(
                 title = choice.name,
-                description = choice.description,
+                description = "",
                 selected = selected,
                 tag = "model_menu_item_${choice.value}",
                 trailing = when {

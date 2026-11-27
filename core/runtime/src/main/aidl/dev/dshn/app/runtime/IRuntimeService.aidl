@@ -20,6 +20,12 @@ interface IRuntimeService {
     String readSessionSurfaceFromBridge(String sessionId);
     String listCommandsFromBridge(String sessionId);
     String executeCommandFromBridge(String sessionId, String line);
+    String inspectContextFromBridge(String sessionId);
+    String listPluginsFromBridge(String locale);
+    String setPluginEnabledFromBridge(String name, boolean enabled);
+    String installPluginFromBridge(String spec, boolean enabled);
+    String removePluginFromBridge(String name);
+    String installPnpmFromBridge();
 
     void sendPrompt(String requestId, String sessionId, String text);
     void cancelPrompt(String sessionId);

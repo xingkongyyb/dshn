@@ -266,6 +266,36 @@ class SessionBridgeClient(
             put("line", line)
         }, timeoutMs = 60_000)
 
+    suspend fun inspectContextJson(sessionId: String?): JsonObject =
+        call("context.inspect", buildJsonObject {
+            if (!sessionId.isNullOrBlank()) put("sessionId", sessionId)
+        }, timeoutMs = 15_000)
+
+    suspend fun listPluginsJson(locale: String): JsonObject =
+        call("plugins.list", buildJsonObject {
+            put("locale", locale)
+        }, timeoutMs = 15_000)
+
+    suspend fun setPluginEnabledJson(name: String, enabled: Boolean): JsonObject =
+        call("plugins.setEnabled", buildJsonObject {
+            put("name", name)
+            put("enabled", enabled)
+        }, timeoutMs = 30_000)
+
+    suspend fun installPluginJson(spec: String, enabled: Boolean = true): JsonObject =
+        call("plugins.install", buildJsonObject {
+            put("spec", spec)
+            put("enabled", enabled)
+        }, timeoutMs = 180_000)
+
+    suspend fun removePluginJson(name: String): JsonObject =
+        call("plugins.remove", buildJsonObject {
+            put("name", name)
+        }, timeoutMs = 60_000)
+
+    suspend fun installPnpmJson(): JsonObject =
+        call("plugins.installPnpm", buildJsonObject {}, timeoutMs = 180_000)
+
     suspend fun call(
         method: String,
         params: JsonObject,

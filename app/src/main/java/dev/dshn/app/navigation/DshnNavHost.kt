@@ -20,6 +20,7 @@ import dev.dshn.feature.settings.SettingsDiagnosticsRoute
 import dev.dshn.feature.settings.SettingsEnvironmentRoute
 import dev.dshn.feature.settings.SettingsGraph
 import dev.dshn.feature.settings.SettingsModelRoute
+import dev.dshn.feature.settings.SettingsPluginsRoute
 import dev.dshn.feature.settings.settingsGraph
 import dev.dshn.feature.setup.SetupRoute
 import dev.dshn.feature.setup.setupScreen
@@ -64,6 +65,7 @@ fun DshnNavHost(
         chatScreen(
             factory = appContainer.chatViewModelFactory,
             onComposerHeight = onComposerHeight,
+            onOpenPlugins = { navController.navigate(SettingsPluginsRoute) { launchSingleTop = true } },
             onOpenTerminal = { navController.navigate(TerminalRoute) { launchSingleTop = true } },
             onOpenDeviceBridge = { navController.navigate(DeviceBridgeRoute) { launchSingleTop = true } },
             onOpenSettings = { navController.navigate(SettingsGraph) { launchSingleTop = true } },

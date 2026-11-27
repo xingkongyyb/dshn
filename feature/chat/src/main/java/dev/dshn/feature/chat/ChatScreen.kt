@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(
     vm: ChatViewModel,
+    onOpenPlugins: () -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenDeviceBridge: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -78,6 +79,9 @@ fun ChatScreen(
     val configOptions by vm.configOptions.collectAsStateWithLifecycle()
     val usageUsed by vm.usageUsed.collectAsStateWithLifecycle()
     val usageSize by vm.usageSize.collectAsStateWithLifecycle()
+    val contextInspect by vm.contextInspect.collectAsStateWithLifecycle()
+    val contextInspectLoading by vm.contextInspectLoading.collectAsStateWithLifecycle()
+    val contextInspectError by vm.contextInspectError.collectAsStateWithLifecycle()
     val slashCommands by vm.slashCommands.collectAsStateWithLifecycle()
     val interruptedBanner by vm.interruptedTurnBanner.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
@@ -140,6 +144,10 @@ fun ChatScreen(
                 onOpenSession = {
                     closeDrawer()
                     vm.switchToSession(it)
+                },
+                onOpenPlugins = {
+                    closeDrawer()
+                    onOpenPlugins()
                 },
                 onOpenTerminal = {
                     closeDrawer()
@@ -266,9 +274,15 @@ fun ChatScreen(
                     canSend = canChat && input.isNotBlank(),
                     streaming = streaming,
                     readOnly = readOnly,
+                    sessionAttached = sessionAttached,
                     configOptions = configOptions,
                     usageUsed = usageUsed,
                     usageSize = usageSize,
+                    contextInspect = contextInspect,
+                    contextInspectLoading = contextInspectLoading,
+                    contextInspectError = contextInspectError,
+                    onInspectContext = { vm.inspectActiveContext() },
+                    onCopy = { label, text -> vm.copyToClipboard(label, text) },
                     onSetOption = { id, value, onResult -> vm.setConfigOption(id, value, onResult) },
                     configKey = sessionId,
                     onSend = {

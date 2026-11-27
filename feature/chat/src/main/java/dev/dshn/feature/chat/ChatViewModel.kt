@@ -6,6 +6,7 @@ import dev.dshn.app.acp.AcpConfigOption
 import dev.dshn.app.data.AppSettings
 import dev.dshn.app.data.ClipboardHelper
 import dev.dshn.app.data.SettingsStore
+import dev.dshn.app.runtime.ContextInspectSnapshot
 import dev.dshn.app.runtime.EnvInstallProgress
 import dev.dshn.app.runtime.EnvManifest
 import dev.dshn.app.runtime.EnvironmentCoordinator
@@ -36,6 +37,9 @@ class ChatViewModel(
     val configOptions: StateFlow<List<AcpConfigOption>> = runtimeSessionCoordinator.configOptions
     val usageUsed: StateFlow<Long> = runtimeSessionCoordinator.usageUsed
     val usageSize: StateFlow<Long> = runtimeSessionCoordinator.usageSize
+    val contextInspect: StateFlow<ContextInspectSnapshot?> = runtimeSessionCoordinator.contextInspect
+    val contextInspectLoading: StateFlow<Boolean> = runtimeSessionCoordinator.contextInspectLoading
+    val contextInspectError: StateFlow<String?> = runtimeSessionCoordinator.contextInspectError
     val slashCommands: StateFlow<List<SlashCommandDescriptor>> = runtimeSessionCoordinator.slashCommands
     val interruptedTurnBanner: StateFlow<String?> = runtimeSessionCoordinator.interruptedTurnBanner
     val sessions: StateFlow<List<SessionSummaryItem>> = runtimeSessionCoordinator.sessions
@@ -66,6 +70,8 @@ class ChatViewModel(
         value: String,
         onResult: (List<AcpConfigOption>?) -> Unit = {}
     ) = runtimeSessionCoordinator.setConfigOption(configId, value, onResult)
+
+    fun inspectActiveContext() = runtimeSessionCoordinator.inspectActiveContext()
 
     fun startRuntimeAndAttach() = runtimeSessionCoordinator.startRuntimeAndAttach()
 

@@ -208,6 +208,38 @@ class RuntimeController(
         json.parseToJsonElement(raw).jsonObject
     }
 
+    suspend fun inspectContextFromBridge(sessionId: String?): ContextInspectSnapshot = withContext(Dispatchers.IO) {
+        val encoded = requireService().inspectContextFromBridge(sessionId)
+        val raw = LargePayloadXfer.decode(encoded)
+        BridgePayloadParsers.parseContextInspect(raw)
+    }
+
+    suspend fun listPluginsFromBridge(locale: String): PluginsListSnapshot = withContext(Dispatchers.IO) {
+        val encoded = requireService().listPluginsFromBridge(locale)
+        val raw = LargePayloadXfer.decode(encoded)
+        BridgePayloadParsers.parsePluginsList(raw)
+    }
+
+    suspend fun setPluginEnabledFromBridge(name: String, enabled: Boolean): PluginActionResult = withContext(Dispatchers.IO) {
+        val raw = requireService().setPluginEnabledFromBridge(name, enabled)
+        BridgePayloadParsers.parsePluginAction(raw)
+    }
+
+    suspend fun installPluginFromBridge(spec: String, enabled: Boolean = true): PluginActionResult = withContext(Dispatchers.IO) {
+        val raw = requireService().installPluginFromBridge(spec, enabled)
+        BridgePayloadParsers.parsePluginAction(raw)
+    }
+
+    suspend fun removePluginFromBridge(name: String): PluginActionResult = withContext(Dispatchers.IO) {
+        val raw = requireService().removePluginFromBridge(name)
+        BridgePayloadParsers.parsePluginAction(raw)
+    }
+
+    suspend fun installPnpmFromBridge(): PluginActionResult = withContext(Dispatchers.IO) {
+        val raw = requireService().installPnpmFromBridge()
+        BridgePayloadParsers.parsePluginAction(raw)
+    }
+
     suspend fun sendPrompt(requestId: String, sessionId: String, text: String) = withContext(Dispatchers.IO) {
         requireService().sendPrompt(requestId, sessionId, text)
     }

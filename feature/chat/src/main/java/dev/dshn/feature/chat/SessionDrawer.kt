@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DeveloperBoard
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -76,6 +77,7 @@ internal fun SessionDrawer(
     onNewChat: () -> Unit,
     onNewChatInDir: () -> Unit,
     onOpenSession: (SessionSummaryItem) -> Unit,
+    onOpenPlugins: () -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenDeviceBridge: () -> Unit,
     onOpenSettings: () -> Unit
@@ -230,6 +232,16 @@ internal fun SessionDrawer(
             HorizontalDivider(color = semantic.cardBorder)
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 val itemColors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                NavigationDrawerItem(
+                    label = { Text(tr("插件", "Plugins")) },
+                    icon = { Icon(Icons.Rounded.Extension, contentDescription = null) },
+                    selected = false,
+                    onClick = onOpenPlugins,
+                    colors = itemColors,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("drawer_nav_plugins")
+                )
                 NavigationDrawerItem(
                     label = { Text(tr("终端", "Terminal")) },
                     icon = { Icon(Icons.Rounded.Terminal, contentDescription = null) },

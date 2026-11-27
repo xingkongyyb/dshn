@@ -111,6 +111,33 @@ class RuntimeSessionCoordinator(
     private val _apiKeyMasked = MutableStateFlow<String?>(null)
     val apiKeyMasked: StateFlow<String?> = _apiKeyMasked.asStateFlow()
 
+    private val _contextInspect = MutableStateFlow<ContextInspectSnapshot?>(null)
+    val contextInspect: StateFlow<ContextInspectSnapshot?> = _contextInspect.asStateFlow()
+
+    private val _contextInspectLoading = MutableStateFlow(false)
+    val contextInspectLoading: StateFlow<Boolean> = _contextInspectLoading.asStateFlow()
+
+    private val _contextInspectError = MutableStateFlow<String?>(null)
+    val contextInspectError: StateFlow<String?> = _contextInspectError.asStateFlow()
+
+    private val _pluginsSnapshot = MutableStateFlow<PluginsListSnapshot?>(null)
+    val pluginsSnapshot: StateFlow<PluginsListSnapshot?> = _pluginsSnapshot.asStateFlow()
+
+    private val _pluginsLoading = MutableStateFlow(false)
+    val pluginsLoading: StateFlow<Boolean> = _pluginsLoading.asStateFlow()
+
+    private val _pluginsBusyName = MutableStateFlow<String?>(null)
+    val pluginsBusyName: StateFlow<String?> = _pluginsBusyName.asStateFlow()
+
+    private val _pluginsError = MutableStateFlow<String?>(null)
+    val pluginsError: StateFlow<String?> = _pluginsError.asStateFlow()
+
+    private val _pluginsRestartRequired = MutableStateFlow(false)
+    val pluginsRestartRequired: StateFlow<Boolean> = _pluginsRestartRequired.asStateFlow()
+
+    private var contextInspectGen = 0
+    private var pluginsRefreshGen = 0
+
     private val sessionOpMutex = Mutex()
     private val streamingSessions = LinkedHashSet<String>()
     private val resumedMidStream = HashSet<String>()
@@ -598,6 +625,7 @@ class RuntimeSessionCoordinator(
                             createSessionInternal(defaultCwd())
                         }
                         refreshSessions()
+                        _pluginsRestartRequired.value = false
                         banner(
                             if (fellBackToNew) t("运行环境已重启，原对话无法恢复，已为你新建对话", "Runtime restarted; previous chat could not be resumed, started a new chat")
                             else t("运行环境已重启", "Runtime restarted")
@@ -696,6 +724,8 @@ class RuntimeSessionCoordinator(
             _messages.value = emptyList()
             _usageUsed.value = 0L
             _usageSize.value = 0L
+            _contextInspect.value = null
+            _contextInspectError.value = null
             lastSubmittedPromptText = null
         }
         _activeSessionId.value = sid
@@ -726,6 +756,8 @@ class RuntimeSessionCoordinator(
                     _configOptions.value = emptyList()
                     _usageUsed.value = 0L
                     _usageSize.value = 0L
+                    _contextInspect.value = null
+                    _contextInspectError.value = null
                     _slashCommands.value = emptyList()
                     _messages.value = listOf(
                         UiChatMessage(
@@ -782,6 +814,8 @@ class RuntimeSessionCoordinator(
         _configOptions.value = cfg
         _usageUsed.value = 0L
         _usageSize.value = 0L
+        _contextInspect.value = null
+        _contextInspectError.value = null
         lastSubmittedPromptText = null
         settingsStore.update { it.copy(selectedSessionId = sid) }
 
@@ -890,6 +924,8 @@ class RuntimeSessionCoordinator(
                     _configOptions.value = emptyList()
                     _usageUsed.value = 0L
                     _usageSize.value = 0L
+                    _contextInspect.value = null
+                    _contextInspectError.value = null
                     _slashCommands.value = emptyList()
                 }
                 syncActiveStreamingFlag()
@@ -932,6 +968,204 @@ class RuntimeSessionCoordinator(
                 if (sessionId == null || sessionId == _activeSessionId.value) {
                     _slashCommands.value = it
                 }
+            }
+        }
+    }
+
+    fun inspectActiveContext() {
+        val sid = _activeSessionId.value
+        if (!isRuntimeUsable()) {
+            _contextInspectLoading.value = false
+            _contextInspectError.value = t("运行环境未就绪，暂时无法读取上下文详情", "Runtime is not running; context details are unavailable")
+            return
+        }
+        val gen = ++contextInspectGen
+        scope.launch {
+            _contextInspectLoading.value = true
+            _contextInspectError.value = null
+            val res = runCatching { runtimeController.inspectContextFromBridge(sid) }
+            if (gen != contextInspectGen) return@launch
+            res.onSuccess { snap ->
+                _contextInspect.value = snap
+                if (snap.contextWindow > 0L && _usageSize.value == 0L) {
+                    _usageSize.value = snap.contextWindow
+                }
+                if (snap.usedTokens > 0L && _usageUsed.value == 0L) {
+                    _usageUsed.value = snap.usedTokens
+                }
+            }.onFailure { err ->
+                _contextInspectError.value = err.message ?: t("读取上下文详情失败", "Failed to inspect context")
+            }
+            _contextInspectLoading.value = false
+        }
+    }
+
+    fun refreshPlugins() {
+        if (!isRuntimeUsable()) {
+            _pluginsLoading.value = false
+            _pluginsError.value = t("运行环境尚未启动，启动后即可管理 DSH 插件", "Start the runtime first to manage DSH plugins")
+            return
+        }
+        val gen = ++pluginsRefreshGen
+        val locale = if (isZh()) "zh-CN" else "en-US"
+        scope.launch {
+            _pluginsLoading.value = true
+            _pluginsError.value = null
+            val res = runCatching { runtimeController.listPluginsFromBridge(locale) }
+            if (gen != pluginsRefreshGen) return@launch
+            res.onSuccess { snap ->
+                _pluginsSnapshot.value = snap
+                if (!snap.available) {
+                    _pluginsError.value = snap.error ?: t("当前 DSH 未启用插件管理服务", "DSH plugin manager service is unavailable")
+                }
+            }.onFailure { err ->
+                _pluginsError.value = err.message ?: t("加载插件列表失败", "Failed to load plugins")
+            }
+            _pluginsLoading.value = false
+        }
+    }
+
+    fun setPluginEnabled(name: String, enabled: Boolean) {
+        if (_pluginsBusyName.value != null) return
+        scope.launch {
+            _pluginsBusyName.value = name
+            _pluginsError.value = null
+            val res = runCatching { runtimeController.setPluginEnabledFromBridge(name, enabled) }
+            _pluginsBusyName.value = null
+            res.onSuccess { act ->
+                if (act.ok) {
+                    if (act.restartRequired) {
+                        _pluginsRestartRequired.value = true
+                    }
+                    banner(
+                        if (act.restartRequired) {
+                            t(
+                                if (enabled) "已启用插件，重启运行环境后生效" else "已停用插件，重启运行环境后生效",
+                                if (enabled) "Plugin enabled. Restart runtime to apply." else "Plugin disabled. Restart runtime to apply."
+                            )
+                        } else {
+                            t(
+                                if (enabled) "插件已启用" else "插件已停用",
+                                if (enabled) "Plugin enabled" else "Plugin disabled"
+                            )
+                        },
+                        if (act.restartRequired) BannerAction.RESTART_RUNTIME else null
+                    )
+                    refreshPlugins()
+                } else {
+                    val msg = act.diagnostic ?: t("操作失败（${act.application}）", "Action failed (${act.application})")
+                    _pluginsError.value = msg
+                    banner(msg)
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: t("切换插件状态失败", "Failed to toggle plugin")
+                _pluginsError.value = msg
+                banner(msg)
+            }
+        }
+    }
+
+    fun installPlugin(spec: String, onCompleted: (Boolean) -> Unit = {}) {
+        val trimmed = spec.trim()
+        if (trimmed.isEmpty() || _pluginsBusyName.value != null) return
+        scope.launch {
+            _pluginsBusyName.value = "__install__"
+            _pluginsError.value = null
+            val res = runCatching { runtimeController.installPluginFromBridge(trimmed, enabled = true) }
+            _pluginsBusyName.value = null
+            res.onSuccess { act ->
+                if (act.missingPnpm) {
+                    val msg = t(
+                        "容器内未安装 pnpm，请先点击上方「安装 pnpm」后再安装第三方/按需插件",
+                        "pnpm is not installed in the container. Tap 'Install pnpm' above first."
+                    )
+                    _pluginsError.value = msg
+                    banner(msg)
+                    onCompleted(false)
+                } else if (act.ok) {
+                    if (act.restartRequired) {
+                        _pluginsRestartRequired.value = true
+                    }
+                    banner(
+                        if (act.restartRequired) {
+                            t("插件 ${act.name ?: trimmed} 已安装，重启运行环境后生效", "Installed ${act.name ?: trimmed}. Restart runtime to apply.")
+                        } else {
+                            t("插件 ${act.name ?: trimmed} 已安装", "Installed ${act.name ?: trimmed}")
+                        },
+                        if (act.restartRequired) BannerAction.RESTART_RUNTIME else null
+                    )
+                    refreshPlugins()
+                    onCompleted(true)
+                } else {
+                    val msg = act.diagnostic ?: t("安装失败（${act.application}）", "Install failed (${act.application})")
+                    _pluginsError.value = msg
+                    banner(msg)
+                    onCompleted(false)
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: t("安装插件失败", "Failed to install plugin")
+                _pluginsError.value = msg
+                banner(msg)
+                onCompleted(false)
+            }
+        }
+    }
+
+    fun removePlugin(name: String) {
+        if (_pluginsBusyName.value != null) return
+        scope.launch {
+            _pluginsBusyName.value = name
+            _pluginsError.value = null
+            val res = runCatching { runtimeController.removePluginFromBridge(name) }
+            _pluginsBusyName.value = null
+            res.onSuccess { act ->
+                if (act.ok) {
+                    if (act.restartRequired) {
+                        _pluginsRestartRequired.value = true
+                    }
+                    banner(
+                        if (act.restartRequired) {
+                            t("插件已卸载，重启运行环境后生效", "Plugin removed. Restart runtime to apply.")
+                        } else {
+                            t("插件已卸载", "Plugin removed")
+                        },
+                        if (act.restartRequired) BannerAction.RESTART_RUNTIME else null
+                    )
+                    refreshPlugins()
+                } else {
+                    val msg = act.diagnostic ?: t("卸载失败（${act.application}）", "Remove failed (${act.application})")
+                    _pluginsError.value = msg
+                    banner(msg)
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: t("卸载插件失败", "Failed to remove plugin")
+                _pluginsError.value = msg
+                banner(msg)
+            }
+        }
+    }
+
+    fun installPnpm() {
+        if (_pluginsBusyName.value != null) return
+        scope.launch {
+            _pluginsBusyName.value = "__pnpm__"
+            _pluginsError.value = null
+            banner(t("正在容器内安装 pnpm，请稍候…", "Installing pnpm inside container…"))
+            val res = runCatching { runtimeController.installPnpmFromBridge() }
+            _pluginsBusyName.value = null
+            res.onSuccess { act ->
+                if (act.ok) {
+                    banner(t("pnpm 安装完成，现在可以安装按需/第三方插件", "pnpm installed. You can now install plugins."))
+                    refreshPlugins()
+                } else {
+                    val msg = act.diagnostic ?: t("pnpm 安装失败", "Failed to install pnpm")
+                    _pluginsError.value = msg
+                    banner(msg)
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: t("pnpm 安装失败", "Failed to install pnpm")
+                _pluginsError.value = msg
+                banner(msg)
             }
         }
     }

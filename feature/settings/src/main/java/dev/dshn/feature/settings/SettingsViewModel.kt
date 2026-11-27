@@ -16,6 +16,7 @@ import dev.dshn.app.data.StatusBannerBus
 import dev.dshn.app.runtime.EnvInstallProgress
 import dev.dshn.app.runtime.EnvManifest
 import dev.dshn.app.runtime.EnvironmentCoordinator
+import dev.dshn.app.runtime.PluginsListSnapshot
 import dev.dshn.app.runtime.RuntimeSessionCoordinator
 import dev.dshn.app.runtime.RuntimeUiStatus
 import dev.dshn.app.security.AuditLogger
@@ -42,6 +43,11 @@ class SettingsViewModel(
     val envInstallProgress: StateFlow<EnvInstallProgress> = environmentCoordinator.envInstallProgress
     val runtimeStatus: StateFlow<RuntimeUiStatus> = runtimeSessionCoordinator.runtimeStatus
     val rootAuthState: StateFlow<RootAuthState> = rootAuthManager.state
+    val pluginsSnapshot: StateFlow<PluginsListSnapshot?> = runtimeSessionCoordinator.pluginsSnapshot
+    val pluginsLoading: StateFlow<Boolean> = runtimeSessionCoordinator.pluginsLoading
+    val pluginsBusyName: StateFlow<String?> = runtimeSessionCoordinator.pluginsBusyName
+    val pluginsError: StateFlow<String?> = runtimeSessionCoordinator.pluginsError
+    val pluginsRestartRequired: StateFlow<Boolean> = runtimeSessionCoordinator.pluginsRestartRequired
 
     fun onSettingsHomeEntered() {
         environmentCoordinator.refreshManifestOnly()
@@ -128,6 +134,30 @@ class SettingsViewModel(
 
     fun restartRuntime() {
         runtimeSessionCoordinator.restartRuntime()
+    }
+
+    fun startRuntimeAndAttach() {
+        runtimeSessionCoordinator.startRuntimeAndAttach()
+    }
+
+    fun refreshPlugins() {
+        runtimeSessionCoordinator.refreshPlugins()
+    }
+
+    fun setPluginEnabled(name: String, enabled: Boolean) {
+        runtimeSessionCoordinator.setPluginEnabled(name, enabled)
+    }
+
+    fun installPlugin(spec: String, onCompleted: (Boolean) -> Unit = {}) {
+        runtimeSessionCoordinator.installPlugin(spec, onCompleted)
+    }
+
+    fun removePlugin(name: String) {
+        runtimeSessionCoordinator.removePlugin(name)
+    }
+
+    fun installPnpm() {
+        runtimeSessionCoordinator.installPnpm()
     }
 
     fun applyPhantomProcessFixViaRoot() {
