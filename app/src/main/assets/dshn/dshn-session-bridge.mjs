@@ -657,6 +657,15 @@ export function apply(ctx) {
           }
           const spec = typeof params.spec === "string" ? params.spec.trim() : "";
           if (!spec) return fail("INVALID_PARAMS", "spec is required");
+          const localCandidate = spec.replace(/^(?:file|link):/, "");
+          if ((localCandidate !== spec || path.isAbsolute(localCandidate)) && !fs.existsSync(localCandidate)) {
+            return reply({
+              ok: false,
+              application: "failed",
+              restartRequired: false,
+              diagnostic: `Local plugin path not found in container: ${localCandidate}`,
+            });
+          }
           if (!checkPnpmAvailable()) {
             return reply({
               ok: false,
@@ -670,10 +679,18 @@ export function apply(ctx) {
           const appState = String(res?.application ?? "unknown");
           const ok = appState !== "failed" && appState !== "cancelled";
           const pkgOut = typeof res?.packageResult?.output === "string" ? res.packageResult.output.trim() : "";
+          const errCode = res?.error?.code;
+          const friendlyCode =
+            errCode === "not-bundle"
+              ? "Package does not declare a DSH bundle manifest (missing package.json dsh.bundle)"
+              : errCode === "incompatible-version"
+                ? "Plugin package version is incompatible with current DSH runtime"
+                : null;
           const diag =
+            friendlyCode ??
             res?.diagnostic ??
             res?.error?.message ??
-            res?.error?.code ??
+            errCode ??
             (pkgOut ? pkgOut.slice(-450) : null);
           return reply({
             ok,

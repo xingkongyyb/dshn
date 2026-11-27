@@ -1,5 +1,7 @@
 package dev.dshn.feature.settings
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -16,6 +18,7 @@ import dev.dshn.app.data.StatusBannerBus
 import dev.dshn.app.runtime.EnvInstallProgress
 import dev.dshn.app.runtime.EnvManifest
 import dev.dshn.app.runtime.EnvironmentCoordinator
+import dev.dshn.app.runtime.LocalPluginImporter
 import dev.dshn.app.runtime.PluginsListSnapshot
 import dev.dshn.app.runtime.RuntimeSessionCoordinator
 import dev.dshn.app.runtime.RuntimeUiStatus
@@ -150,6 +153,38 @@ class SettingsViewModel(
 
     fun installPlugin(spec: String, onCompleted: (Boolean) -> Unit = {}) {
         runtimeSessionCoordinator.installPlugin(spec, onCompleted)
+    }
+
+    fun importLocalPlugin(context: Context, uri: Uri) {
+        if (!environmentCoordinator.isRootfsReady()) {
+            statusBannerBus.showLocalized(
+                "运行环境尚未准备好，请先完成环境初始化",
+                "Runtime environment is not ready yet"
+            )
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            statusBannerBus.showLocalized(
+                "正在导入本地插件包…",
+                "Importing local plugin package…"
+            )
+            val staged = LocalPluginImporter.stageLocalPluginUri(
+                context = context.applicationContext,
+                rootfs = environmentCoordinator.rootfsDir,
+                uri = uri
+            )
+            staged.fold(
+                onSuccess = { item ->
+                    runtimeSessionCoordinator.installPlugin(item.containerPath)
+                },
+                onFailure = { err ->
+                    statusBannerBus.showLocalized(
+                        "本地插件导入失败：${err.message}",
+                        "Local plugin import failed: ${err.message}"
+                    )
+                }
+            )
+        }
     }
 
     fun removePlugin(name: String) {

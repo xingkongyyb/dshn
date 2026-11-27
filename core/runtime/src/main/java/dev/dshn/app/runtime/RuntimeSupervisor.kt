@@ -250,16 +250,19 @@ class RuntimeSupervisor(
                 if (!stopRequested.get()) {
                     handleUnexpectedProcessExit("ACP stdout closed: ${err?.message ?: "EOF"}")
                 }
+            },
+            onSessionUpdate = { upd ->
+                // Ordered inline delivery on the ACP stdout reader thread ensures every trailing
+                // session/update reaches :app strictly BEFORE session/prompt completion fires.
+                val raw = serializeSessionUpdate(upd)
+                val encoded = LargePayloadXfer.encode(ipcXferDir, "upd", raw)
+                sink.onSessionUpdate(upd.sessionId, encoded)
             }
         )
         acpClient = client
 
         updateCollectorJob?.cancel()
-        updateCollectorJob = scope.launch {
-            client.updates.collect { upd ->
-                sink.onSessionUpdate(upd.sessionId, serializeSessionUpdate(upd))
-            }
-        }
+        updateCollectorJob = null
 
         try {
             updateState(RuntimeLifecycleState.STARTING, "Waiting for ACP initialize handshake...")
@@ -745,9 +748,13 @@ class RuntimeSupervisor(
             put("toolCallId", u.toolCallId)
             put("status", u.status)
             if (u.content != null) {
-                put("content", u.content)
                 val extracted = AcpClient.extractToolUpdateContentText(u.content)
-                if (extracted.isNotEmpty()) put("contentText", extracted)
+                if (extracted.isNotEmpty()) {
+                    // Avoid duplicating huge raw content payloads (e.g. base64 screenshots) across Binder.
+                    put("contentText", extracted)
+                } else {
+                    put("content", u.content)
+                }
             }
         }.toString()
         is SessionUpdate.UsageUpdate -> buildJsonObject {

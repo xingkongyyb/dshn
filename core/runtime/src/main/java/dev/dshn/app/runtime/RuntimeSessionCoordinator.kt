@@ -1590,7 +1590,7 @@ class RuntimeSessionCoordinator(
                 val id = u["toolCallId"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 val status = u["status"]?.jsonPrimitive?.contentOrNull ?: ""
                 val extractedText = u["contentText"]?.jsonPrimitive?.contentOrNull
-                val contentStr = extractedText?.take(2400)
+                val contentStr = extractedText?.let { clipToolSummary(it) }
                     ?: u["content"]?.let { summarizeJson(it) }.orEmpty()
                 val unknown = contentStr.contains("TOOL_OUTCOME_UNKNOWN")
                 val idx = streamTools.indexOfFirst { it.toolCallId == id }
@@ -1631,10 +1631,12 @@ class RuntimeSessionCoordinator(
         }
     }
 
-    private fun summarizeJson(elem: JsonElement): String {
-        val s = elem.toString()
-        return if (s.length <= 2400) s else s.take(2400) + "..."
+    private fun clipToolSummary(raw: String, maxChars: Int = 16_000): String {
+        if (raw.length <= maxChars) return raw
+        return raw.take(maxChars) + "\n… " + t("（共 ${raw.length} 字符，已显示前 $maxChars 字符）", "(${raw.length} chars total; showing first $maxChars)")
     }
+
+    private fun summarizeJson(elem: JsonElement): String = clipToolSummary(elem.toString())
 
     /**
      * Emits the very first streaming chunk immediately (0 ms TTFT penalty) and coalesces

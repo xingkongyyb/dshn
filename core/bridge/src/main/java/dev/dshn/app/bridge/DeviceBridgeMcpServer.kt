@@ -382,9 +382,10 @@ class DeviceBridgeMcpServer(
                 }
                 val vd = virtualDisplayController
                     ?: return textResult("[UNAVAILABLE] Virtual display controller unavailable.", isError = true)
-                val w = args["width"]?.jsonPrimitive?.intOrNull ?: 720
-                val h = args["height"]?.jsonPrimitive?.intOrNull ?: 1280
-                val dpi = args["dpi"]?.jsonPrimitive?.intOrNull ?: 300
+                val preset = settings.virtualDisplayPreset
+                val w = args["width"]?.jsonPrimitive?.intOrNull ?: preset.width
+                val h = args["height"]?.jsonPrimitive?.intOrNull ?: preset.height
+                val dpi = args["dpi"]?.jsonPrimitive?.intOrNull ?: preset.dpi
                 val pkg = args["package"]?.jsonPrimitive?.contentOrNull
                 val summary = "Open background virtual display (${w}x${h}@${dpi}" +
                     (if (!pkg.isNullOrBlank()) ", launch $pkg" else "") + ")"

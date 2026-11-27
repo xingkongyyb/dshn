@@ -166,13 +166,14 @@ class AcpClient(
     private val scope: CoroutineScope,
     private val onPermissionRequest: suspend (PermissionRequest) -> PermissionOutcome,
     private val onStreamDegraded: ((badLines: Int, sample: String) -> Unit)? = null,
-    private val onStreamClosed: ((Throwable?) -> Unit)? = null
+    private val onStreamClosed: ((Throwable?) -> Unit)? = null,
+    private val onSessionUpdate: ((SessionUpdate) -> Unit)? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8))
+    private val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8), 64 * 1024)
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
-    private val _updates = MutableSharedFlow<SessionUpdate>(extraBufferCapacity = 512)
+    private val _updates = MutableSharedFlow<SessionUpdate>(extraBufferCapacity = 4096)
     val updates: SharedFlow<SessionUpdate> = _updates
 
     private val consecutiveBadLines = AtomicInteger(0)
@@ -237,8 +238,30 @@ class AcpClient(
                 val params = msg["params"]?.jsonObject ?: return
                 val sessionId = params["sessionId"]?.jsonPrimitive?.content ?: ""
                 val update = params["update"]?.jsonObject ?: return
-                _updates.tryEmit(parseUpdate(sessionId, update))
+                val parsed = parseUpdate(sessionId, update)
+                // Dispatch synchronously in stdout read order BEFORE any subsequent JSON-RPC
+                // response (e.g. session/prompt completion) can be read and delivered.
+                onSessionUpdate?.invoke(parsed)
+                _updates.tryEmit(parsed)
             }
+        }
+    }
+
+    private fun extractChunkText(u: JsonObject): String {
+        val contentElem = u["content"]
+        return when (contentElem) {
+            is JsonObject -> contentElem["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            is JsonArray -> contentElem.mapNotNull { item ->
+                when (item) {
+                    is JsonPrimitive -> item.contentOrNull
+                    is JsonObject -> item["text"]?.jsonPrimitive?.contentOrNull
+                    else -> null
+                }
+            }.joinToString("")
+            is JsonPrimitive -> contentElem.contentOrNull.orEmpty()
+            null -> u["text"]?.jsonPrimitive?.contentOrNull
+                ?: u["delta"]?.jsonPrimitive?.contentOrNull
+                ?: ""
         }
     }
 
@@ -246,7 +269,6 @@ class AcpClient(
         val type = u["sessionUpdate"]?.jsonPrimitive?.content
         val contentObj = runCatching { u["content"]?.jsonObject }.getOrNull()
         val contentType = contentObj?.get("type")?.jsonPrimitive?.contentOrNull
-        val contentText = contentObj?.get("text")?.jsonPrimitive?.contentOrNull
         return when (type) {
             "agent_message_chunk" -> {
                 if (contentType == "image") {
@@ -263,14 +285,14 @@ class AcpClient(
                     SessionUpdate.AgentMessageChunk(
                         sessionId = sessionId,
                         messageId = u["messageId"]?.jsonPrimitive?.contentOrNull,
-                        text = contentText ?: ""
+                        text = extractChunkText(u)
                     )
                 }
             }
             "agent_thought_chunk" -> SessionUpdate.AgentThoughtChunk(
                 sessionId = sessionId,
                 messageId = u["messageId"]?.jsonPrimitive?.contentOrNull,
-                text = contentText ?: ""
+                text = extractChunkText(u)
             )
             "tool_call" -> SessionUpdate.ToolCall(
                 sessionId = sessionId,

@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dshn.app.bridge.RootAuthStatus
+import dev.dshn.app.data.VirtualDisplayResolutionPreset
 import dev.dshn.app.security.RootPolicyMode
 import dev.dshn.core.ui.ConfirmDialog
 import dev.dshn.core.ui.InfoBanner
@@ -279,6 +280,24 @@ fun DeviceBridgeScreen(
                             Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            Text(
+                                tr("分辨率预设", "Resolution preset"),
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                VirtualDisplayResolutionPreset.entries.forEach { preset ->
+                                    FilterChip(
+                                        selected = settings.virtualDisplayPreset == preset,
+                                        enabled = !vdState.starting,
+                                        onClick = { vm.setVirtualDisplayPreset(preset) },
+                                        label = { Text(tr(preset.labelZh, preset.labelEn)) },
+                                        modifier = Modifier.testTag("vd_preset_${preset.name}")
+                                    )
+                                }
+                            }
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)

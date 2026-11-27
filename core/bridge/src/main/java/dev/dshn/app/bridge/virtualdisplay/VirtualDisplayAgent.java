@@ -211,8 +211,8 @@ public final class VirtualDisplayAgent {
         if (virtualDisplay != null && displayId > Display.DEFAULT_DISPLAY) {
             return readyPayload();
         }
-        width = clamp(args.optInt("width", DEFAULT_WIDTH), 360, 1440);
-        height = clamp(args.optInt("height", DEFAULT_HEIGHT), 640, 2560);
+        width = clamp(args.optInt("width", DEFAULT_WIDTH), 360, 2560);
+        height = clamp(args.optInt("height", DEFAULT_HEIGHT), 360, 2560);
         dpi = clamp(args.optInt("dpi", DEFAULT_DPI), 160, 480);
 
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);

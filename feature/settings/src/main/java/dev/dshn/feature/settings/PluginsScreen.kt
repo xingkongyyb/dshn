@@ -1,5 +1,7 @@
 package dev.dshn.feature.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +20,14 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -66,8 +71,17 @@ fun PluginsScreen(
     val error by vm.pluginsError.collectAsStateWithLifecycle()
     val restartRequired by vm.pluginsRestartRequired.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
     var installSpec by rememberSaveable { mutableStateOf("") }
     var pendingRemove by remember { mutableStateOf<PluginBundleInfo?>(null) }
+
+    val localPluginPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            vm.importLocalPlugin(context, uri)
+        }
+    }
 
     val runtimeUsable = runtime.state == RuntimeLifecycleState.HEALTHY || runtime.state == RuntimeLifecycleState.DEGRADED
 
@@ -176,15 +190,15 @@ fun PluginsScreen(
                 }
             }
 
-            // Install third-party / npm / GitHub plugin card
+            // Install third-party / npm / GitHub / local plugin card
             if (runtimeUsable) {
                 item {
                     val installing = busyName == "__install__"
                     DshnSectionCard(
-                        title = tr("安装插件", "Install plugin"),
+                        title = tr("安装或导入插件", "Install or import plugin"),
                         subtitle = tr(
-                            "支持 npm 包名或 GitHub 仓库（等同于 dsh plugin --profile acp add <包名>）",
-                            "Supports npm package names or GitHub specs (equivalent to dsh plugin --profile acp add <spec>)"
+                            "支持 npm 包名、GitHub 仓库、容器绝对路径，或从手机本地选择 .tgz / .tar.gz / .zip 插件包导入",
+                            "Supports npm packages, GitHub specs, container absolute paths, or local .tgz / .tar.gz / .zip archives"
                         ),
                         icon = Icons.Rounded.Extension
                     ) {
@@ -200,7 +214,7 @@ fun PluginsScreen(
                                 enabled = !installing && busyName == null,
                                 placeholder = {
                                     Text(
-                                        "dsh-cost-meter",
+                                        "dsh-cost-meter / /root/my-plugin.tgz",
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -233,6 +247,29 @@ fun PluginsScreen(
                                     Text(tr("安装", "Install"))
                                 }
                             }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                localPluginPicker.launch(
+                                    arrayOf(
+                                        "application/gzip",
+                                        "application/x-gzip",
+                                        "application/x-compressed-tar",
+                                        "application/zip",
+                                        "application/octet-stream",
+                                        "*/*"
+                                    )
+                                )
+                            },
+                            enabled = busyName == null,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("plugins_import_local_button")
+                        ) {
+                            Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(tr("从本地导入插件包（.tgz / .tar.gz / .zip）", "Import local plugin package (.tgz / .tar.gz / .zip)"))
                         }
                     }
                 }

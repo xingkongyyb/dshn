@@ -131,20 +131,32 @@ class VirtualDisplayController(
     }
 
     suspend fun open(
-        width: Int = 720,
-        height: Int = 1280,
-        dpi: Int = 300,
+        width: Int? = null,
+        height: Int? = null,
+        dpi: Int? = null,
         launchPackage: String? = null
     ): Result<VirtualDisplayUiState> = opMutex.withLock {
         runCatching {
             if (Build.VERSION.SDK_INT < 34) {
                 error("Background virtual display requires Android 14+ (API 34+); current API=${Build.VERSION.SDK_INT}")
             }
+            val preset = settingsStore.current().virtualDisplayPreset
+            val targetW = width ?: preset.width
+            val targetH = height ?: preset.height
+            val targetDpi = dpi ?: preset.dpi
             if (_state.value.active && transport != null) {
-                if (!launchPackage.isNullOrBlank()) {
-                    sendCommandLocked("launch", buildJsonObject { put("package", launchPackage.trim()) })
+                val sameGeometry = _state.value.width == targetW &&
+                    _state.value.height == targetH &&
+                    _state.value.dpi == targetDpi
+                if (sameGeometry) {
+                    if (!launchPackage.isNullOrBlank()) {
+                        sendCommandLocked("launch", buildJsonObject { put("package", launchPackage.trim()) })
+                    }
+                    return@runCatching _state.value
                 }
-                return@runCatching _state.value
+                // Resolution changed: cleanly recreate virtual display with the new geometry.
+                runCatching { sendCommandLocked("close", buildJsonObject {}, timeoutMs = 2_000L) }
+                teardownLocked(null)
             }
 
             _state.value = _state.value.copy(starting = true, lastError = null)
@@ -163,9 +175,9 @@ class VirtualDisplayController(
             val res = sendCommandLocked(
                 "open",
                 buildJsonObject {
-                    put("width", width)
-                    put("height", height)
-                    put("dpi", dpi)
+                    put("width", targetW)
+                    put("height", targetH)
+                    put("dpi", targetDpi)
                 }
             )
             if (res["ok"]?.jsonPrimitive?.booleanOrNull != true) {
@@ -178,9 +190,9 @@ class VirtualDisplayController(
                 active = true,
                 starting = false,
                 displayId = res["display_id"]?.jsonPrimitive?.intOrNull ?: -1,
-                width = res["width"]?.jsonPrimitive?.intOrNull ?: width,
-                height = res["height"]?.jsonPrimitive?.intOrNull ?: height,
-                dpi = res["dpi"]?.jsonPrimitive?.intOrNull ?: dpi,
+                width = res["width"]?.jsonPrimitive?.intOrNull ?: targetW,
+                height = res["height"]?.jsonPrimitive?.intOrNull ?: targetH,
+                dpi = res["dpi"]?.jsonPrimitive?.intOrNull ?: targetDpi,
                 driver = res["driver"]?.jsonPrimitive?.contentOrNull ?: conn.driverLabel,
                 rustEncoder = res["rust_encoder"]?.jsonPrimitive?.booleanOrNull ?: false,
                 uiTreeAvailable = res["ui_tree_available"]?.jsonPrimitive?.booleanOrNull ?: false,

@@ -18,6 +18,7 @@ import dev.dshn.app.data.AppSettings
 import dev.dshn.app.data.ClipboardHelper
 import dev.dshn.app.data.SettingsStore
 import dev.dshn.app.data.StatusBannerBus
+import dev.dshn.app.data.VirtualDisplayResolutionPreset
 import dev.dshn.app.security.AuditEntry
 import dev.dshn.app.security.AuditLogger
 import dev.dshn.app.security.RootPolicyMode
@@ -390,15 +391,68 @@ class DeviceBridgeViewModel(
         }
     }
 
+    fun setVirtualDisplayPreset(preset: VirtualDisplayResolutionPreset) {
+        if (settingsStore.current().virtualDisplayPreset == preset) return
+        updateSettings { it.copy(virtualDisplayPreset = preset) }
+        if (virtualDisplayController.state.value.active) {
+            val topPkg = virtualDisplayController.state.value.topComponent
+                .substringBefore('/')
+                .takeIf { it.contains('.') }
+            viewModelScope.launch(Dispatchers.IO) {
+                val res = virtualDisplayController.open(
+                    width = preset.width,
+                    height = preset.height,
+                    dpi = preset.dpi,
+                    launchPackage = topPkg
+                )
+                res.fold(
+                    onSuccess = { st ->
+                        runCatching {
+                            virtualDisplayController.observe(
+                                includeTree = false,
+                                includeImage = true,
+                                maxWidth = preset.previewMaxWidth,
+                                skipUnchanged = false
+                            )
+                        }
+                        statusBannerBus.showLocalized(
+                            "虚拟屏已切换为 ${st.width}×${st.height} @${st.dpi}dpi",
+                            "Virtual display switched to ${st.width}×${st.height} @${st.dpi}dpi"
+                        )
+                    },
+                    onFailure = { err ->
+                        statusBannerBus.showLocalized(
+                            "切换分辨率失败：${err.message}",
+                            "Failed to switch resolution: ${err.message}"
+                        )
+                    }
+                )
+            }
+        }
+    }
+
     fun openVirtualDisplay(launchPackage: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            val res = virtualDisplayController.open(launchPackage = launchPackage)
+            val preset = settingsStore.current().virtualDisplayPreset
+            val res = virtualDisplayController.open(
+                width = preset.width,
+                height = preset.height,
+                dpi = preset.dpi,
+                launchPackage = launchPackage
+            )
             res.fold(
                 onSuccess = { st ->
-                    runCatching { virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false) }
+                    runCatching {
+                        virtualDisplayController.observe(
+                            includeTree = false,
+                            includeImage = true,
+                            maxWidth = preset.previewMaxWidth,
+                            skipUnchanged = false
+                        )
+                    }
                     statusBannerBus.showLocalized(
-                        "后台虚拟屏已启动（Display #${st.displayId} · ${st.driver}）",
-                        "Virtual display started (Display #${st.displayId} · ${st.driver})"
+                        "后台虚拟屏已启动（Display #${st.displayId} · ${st.width}×${st.height} · ${st.driver}）",
+                        "Virtual display started (Display #${st.displayId} · ${st.width}×${st.height} · ${st.driver})"
                     )
                 },
                 onFailure = { err ->
@@ -422,12 +476,13 @@ class DeviceBridgeViewModel(
 
     suspend fun pollVirtualDisplayFrameOnce() {
         if (!virtualDisplayController.state.value.active) return
+        val maxW = settingsStore.current().virtualDisplayPreset.previewMaxWidth
         kotlinx.coroutines.withContext(Dispatchers.IO) {
             virtualDisplayController.observeIfIdle(
                 includeTree = false,
                 includeImage = true,
                 quality = 70,
-                maxWidth = 540,
+                maxWidth = maxW,
                 skipUnchanged = true,
                 waitFrameMs = 0
             )
@@ -437,11 +492,12 @@ class DeviceBridgeViewModel(
     fun refreshVirtualDisplayFrame(skipUnchanged: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!virtualDisplayController.state.value.active) return@launch
+            val maxW = settingsStore.current().virtualDisplayPreset.previewMaxWidth
             virtualDisplayController.observe(
                 includeTree = false,
                 includeImage = true,
                 quality = 70,
-                maxWidth = 540,
+                maxWidth = maxW,
                 skipUnchanged = skipUnchanged,
                 waitFrameMs = if (skipUnchanged) 0 else 250
             )
@@ -454,10 +510,11 @@ class DeviceBridgeViewModel(
                 openVirtualDisplay(launchPackage = packageName)
                 return@launch
             }
+            val maxW = settingsStore.current().virtualDisplayPreset.previewMaxWidth
             val res = virtualDisplayController.launchApp(packageName)
             res.fold(
                 onSuccess = {
-                    virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+                    virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = maxW, skipUnchanged = false)
                 },
                 onFailure = { err ->
                     statusBannerBus.showLocalized(
@@ -472,18 +529,20 @@ class DeviceBridgeViewModel(
     fun tapOnVirtualDisplay(x: Float, y: Float) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!virtualDisplayController.state.value.active) return@launch
+            val maxW = settingsStore.current().virtualDisplayPreset.previewMaxWidth
             virtualDisplayController.tap(x, y)
             kotlinx.coroutines.delay(180)
-            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = maxW, skipUnchanged = false)
         }
     }
 
     fun sendVirtualDisplayKey(action: String) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!virtualDisplayController.state.value.active) return@launch
+            val maxW = settingsStore.current().virtualDisplayPreset.previewMaxWidth
             virtualDisplayController.sendKey(action)
             kotlinx.coroutines.delay(180)
-            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = 540, skipUnchanged = false)
+            virtualDisplayController.observe(includeTree = false, includeImage = true, maxWidth = maxW, skipUnchanged = false)
         }
     }
 

@@ -156,8 +156,8 @@ fun parseMarkdown(src: String): List<MdBlock> {
     return out
 }
 
-private val linkRe = Regex("""^\[([^\]]+)]\(([^)\s]+)\)""")
-private val urlRe = Regex("""^https?://[^\s<>()\[\]]+""")
+private val linkRe = Regex("""\[([^\]]+)]\(([^)\s]+)\)""")
+private val urlRe = Regex("""https?://[^\s<>()\[\]]+""")
 
 /** Inline Markdown: **bold**, *italic*, ~~strike~~, `code`, [links](url) and bare URLs. */
 fun inlineMarkdown(text: String, codeBg: Color, linkColor: Color): AnnotatedString = buildAnnotatedString {
@@ -166,6 +166,7 @@ fun inlineMarkdown(text: String, codeBg: Color, linkColor: Color): AnnotatedStri
 
 private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color, linkColor: Color) {
     var i = 0
+    val len = text.length
     val plain = StringBuilder()
     fun flush() {
         if (plain.isNotEmpty()) {
@@ -173,11 +174,10 @@ private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color
             plain.clear()
         }
     }
-    while (i < text.length) {
+    while (i < len) {
         val c = text[i]
-        val rest = text.substring(i)
         when {
-            c == '\\' && i + 1 < text.length && text[i + 1] in "*_`~[]\\#|" -> {
+            c == '\\' && i + 1 < len && text[i + 1] in "*_`~[]\\#|" -> {
                 plain.append(text[i + 1])
                 i += 2
             }
@@ -193,8 +193,8 @@ private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color
                     plain.append(c); i++
                 }
             }
-            rest.startsWith("**") || rest.startsWith("__") -> {
-                val marker = rest.take(2)
+            (c == '*' && i + 1 < len && text[i + 1] == '*') || (c == '_' && i + 1 < len && text[i + 1] == '_') -> {
+                val marker = if (c == '*') "**" else "__"
                 val end = text.indexOf(marker, i + 2)
                 if (end > i + 2) {
                     flush()
@@ -206,7 +206,7 @@ private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color
                     plain.append(marker); i += 2
                 }
             }
-            rest.startsWith("~~") -> {
+            c == '~' && i + 1 < len && text[i + 1] == '~' -> {
                 val end = text.indexOf("~~", i + 2)
                 if (end > i + 2) {
                     flush()
@@ -218,7 +218,7 @@ private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color
                     plain.append("~~"); i += 2
                 }
             }
-            c == '*' && i + 1 < text.length && !text[i + 1].isWhitespace() -> {
+            c == '*' && i + 1 < len && !text[i + 1].isWhitespace() -> {
                 val end = text.indexOf('*', i + 1)
                 if (end > i + 1 && !text[end - 1].isWhitespace()) {
                     flush()
@@ -230,29 +230,37 @@ private fun appendInline(b: AnnotatedString.Builder, text: String, codeBg: Color
                     plain.append(c); i++
                 }
             }
-            c == '[' && linkRe.containsMatchIn(rest) -> {
-                val m = linkRe.find(rest)!!
-                flush()
-                val url = m.groupValues[2]
-                b.withLink(
-                    LinkAnnotation.Url(
-                        url,
-                        TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
-                    )
-                ) { append(m.groupValues[1]) }
-                i += m.value.length
+            c == '[' -> {
+                val m = linkRe.matchAt(text, i)
+                if (m != null) {
+                    flush()
+                    val url = m.groupValues[2]
+                    b.withLink(
+                        LinkAnnotation.Url(
+                            url,
+                            TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
+                        )
+                    ) { append(m.groupValues[1]) }
+                    i += m.value.length
+                } else {
+                    plain.append(c); i++
+                }
             }
-            (c == 'h') && (i == 0 || !text[i - 1].isLetterOrDigit()) && urlRe.containsMatchIn(rest) -> {
-                val m = urlRe.find(rest)!!
-                val url = m.value.trimEnd('.', ',', ';', ':', '。', '，')
-                flush()
-                b.withLink(
-                    LinkAnnotation.Url(
-                        url,
-                        TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
-                    )
-                ) { append(url) }
-                i += url.length
+            c == 'h' && (i == 0 || !text[i - 1].isLetterOrDigit()) -> {
+                val m = urlRe.matchAt(text, i)
+                if (m != null) {
+                    val url = m.value.trimEnd('.', ',', ';', ':', '。', '，')
+                    flush()
+                    b.withLink(
+                        LinkAnnotation.Url(
+                            url,
+                            TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
+                        )
+                    ) { append(url) }
+                    i += url.length
+                } else {
+                    plain.append(c); i++
+                }
             }
             else -> {
                 plain.append(c); i++
@@ -280,43 +288,59 @@ fun MarkdownText(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (block in blocks) {
             when (block) {
-                is MdBlock.Paragraph -> Text(
-                    inlineMarkdown(block.text, inlineCodeBg, linkColor),
-                    style = style,
-                    color = color
-                )
-                is MdBlock.Heading -> Text(
-                    inlineMarkdown(block.text, inlineCodeBg, linkColor),
-                    style = when (block.level) {
-                        1 -> MaterialTheme.typography.titleLarge
-                        2 -> MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp)
-                        else -> MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp)
-                    },
-                    color = color,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                is MdBlock.ListItem -> Row(Modifier.padding(start = (block.depth * 16).dp)) {
-                    Text(
-                        block.marker,
-                        style = style,
-                        color = if (block.ordered) color else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.width(if (block.ordered) 26.dp else 16.dp)
-                    )
-                    Text(inlineMarkdown(block.text, inlineCodeBg, linkColor), style = style, color = color)
+                is MdBlock.Paragraph -> {
+                    val annotated = remember(block.text, inlineCodeBg, linkColor) {
+                        inlineMarkdown(block.text, inlineCodeBg, linkColor)
+                    }
+                    Text(annotated, style = style, color = color)
                 }
-                is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
-                    Box(
-                        Modifier
-                            .width(3.dp)
-                            .fillMaxHeight()
-                            .background(semantic.thinkingBar, RoundedCornerShape(2.dp))
-                    )
-                    Spacer(Modifier.width(10.dp))
+                is MdBlock.Heading -> {
+                    val annotated = remember(block.text, inlineCodeBg, linkColor) {
+                        inlineMarkdown(block.text, inlineCodeBg, linkColor)
+                    }
                     Text(
-                        inlineMarkdown(block.text, inlineCodeBg, linkColor),
-                        style = style,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        annotated,
+                        style = when (block.level) {
+                            1 -> MaterialTheme.typography.titleLarge
+                            2 -> MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp)
+                            else -> MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp)
+                        },
+                        color = color,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
+                }
+                is MdBlock.ListItem -> {
+                    val annotated = remember(block.text, inlineCodeBg, linkColor) {
+                        inlineMarkdown(block.text, inlineCodeBg, linkColor)
+                    }
+                    Row(Modifier.padding(start = (block.depth * 16).dp)) {
+                        Text(
+                            block.marker,
+                            style = style,
+                            color = if (block.ordered) color else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.width(if (block.ordered) 26.dp else 16.dp)
+                        )
+                        Text(annotated, style = style, color = color)
+                    }
+                }
+                is MdBlock.Quote -> {
+                    val annotated = remember(block.text, inlineCodeBg, linkColor) {
+                        inlineMarkdown(block.text, inlineCodeBg, linkColor)
+                    }
+                    Row(Modifier.height(IntrinsicSize.Min)) {
+                        Box(
+                            Modifier
+                                .width(3.dp)
+                                .fillMaxHeight()
+                                .background(semantic.thinkingBar, RoundedCornerShape(2.dp))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            annotated,
+                            style = style,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 is MdBlock.Code -> CodeBlock(block.lang, block.code, onCopyCode)
                 is MdBlock.Table -> MarkdownTable(block, inlineCodeBg, linkColor)

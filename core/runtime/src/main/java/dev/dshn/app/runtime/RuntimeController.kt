@@ -8,11 +8,12 @@ import android.os.IBinder
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
@@ -62,8 +63,10 @@ class RuntimeController(
     private val _status = MutableStateFlow(RuntimeUiStatus())
     val status: StateFlow<RuntimeUiStatus> = _status.asStateFlow()
 
-    private val _events = MutableSharedFlow<RuntimeCallbackEvent>(extraBufferCapacity = 512)
-    val events: SharedFlow<RuntimeCallbackEvent> = _events
+    // Unbounded FIFO channel so bursts of streamed token chunks are never dropped by tryEmit overflow
+    // and PromptCompleted is guaranteed to be observed strictly after preceding SessionUpdateJson chunks.
+    private val _events = Channel<RuntimeCallbackEvent>(Channel.UNLIMITED)
+    val events: Flow<RuntimeCallbackEvent> = _events.receiveAsFlow()
 
     private val callback = object : IRuntimeCallback.Stub() {
         override fun onStateChanged(state: String, detail: String, restartCount: Int) {
@@ -77,7 +80,8 @@ class RuntimeController(
         }
 
         override fun onSessionUpdate(sessionId: String, jsonUpdate: String) {
-            _events.tryEmit(RuntimeCallbackEvent.SessionUpdateJson(sessionId, jsonUpdate))
+            val decoded = runCatching { LargePayloadXfer.decode(jsonUpdate) }.getOrDefault(jsonUpdate)
+            _events.trySend(RuntimeCallbackEvent.SessionUpdateJson(sessionId, decoded))
         }
 
         override fun onPermissionRequested(
@@ -87,15 +91,15 @@ class RuntimeController(
             title: String?,
             optionsJson: String
         ) {
-            _events.tryEmit(RuntimeCallbackEvent.PermissionRequested(requestId, sessionId, toolCallId, title, optionsJson))
+            _events.trySend(RuntimeCallbackEvent.PermissionRequested(requestId, sessionId, toolCallId, title, optionsJson))
         }
 
         override fun onQuestionRequested(questionRequestJson: String) {
-            _events.tryEmit(RuntimeCallbackEvent.QuestionRequested(questionRequestJson))
+            _events.trySend(RuntimeCallbackEvent.QuestionRequested(questionRequestJson))
         }
 
         override fun onQuestionCancelled(requestId: String, sessionId: String?) {
-            _events.tryEmit(RuntimeCallbackEvent.QuestionCancelled(requestId, sessionId))
+            _events.trySend(RuntimeCallbackEvent.QuestionCancelled(requestId, sessionId))
         }
 
         override fun onPromptCompleted(
@@ -104,15 +108,15 @@ class RuntimeController(
             stopReason: String?,
             errorMessage: String?
         ) {
-            _events.tryEmit(RuntimeCallbackEvent.PromptCompleted(requestId, sessionId, stopReason, errorMessage))
+            _events.trySend(RuntimeCallbackEvent.PromptCompleted(requestId, sessionId, stopReason, errorMessage))
         }
 
         override fun onInterruptedTurnUnknown(sessionId: String, message: String) {
-            _events.tryEmit(RuntimeCallbackEvent.InterruptedTurnUnknown(sessionId, message))
+            _events.trySend(RuntimeCallbackEvent.InterruptedTurnUnknown(sessionId, message))
         }
 
         override fun onStderrLine(line: String) {
-            _events.tryEmit(RuntimeCallbackEvent.StderrLine(line))
+            _events.trySend(RuntimeCallbackEvent.StderrLine(line))
         }
     }
 

@@ -83,6 +83,8 @@ class EnvironmentCoordinator(
 
     fun isRootfsReady(): Boolean = envManager.isRootfsReady()
 
+    val rootfsDir: java.io.File get() = envManager.rootfs
+
     fun isInstallBusy(): Boolean = envInstallRunning.get() || _envInstallProgress.value.inProgress
 
     fun showInstallingBanner() {

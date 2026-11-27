@@ -29,6 +29,22 @@ enum class AppLocaleMode { SYSTEM, EN, ZH }
 @Serializable
 enum class AdbTransportMode { AUTO, PLAIN_TCP, TLS }
 
+@Serializable
+enum class VirtualDisplayResolutionPreset(
+    val width: Int,
+    val height: Int,
+    val dpi: Int,
+    val previewMaxWidth: Int,
+    val labelZh: String,
+    val labelEn: String
+) {
+    COMPACT_540P(540, 960, 210, 540, "540×960 极速", "540×960 Fast"),
+    STANDARD_720P(720, 1280, 300, 540, "720×1280 标准", "720×1280 Balanced"),
+    HD_900P(900, 1600, 360, 640, "900×1600 清晰", "900×1600 Sharp"),
+    FHD_1080P(1080, 1920, 420, 720, "1080×1920 高清", "1080×1920 FHD"),
+    LANDSCAPE_720P(1280, 720, 280, 720, "1280×720 横屏", "1280×720 Landscape")
+}
+
 fun resolveIsZhLocale(mode: AppLocaleMode): Boolean = when (mode) {
     AppLocaleMode.ZH -> true
     AppLocaleMode.EN -> false
@@ -47,6 +63,7 @@ data class AppSettings(
     val allowAdbBridge: Boolean = false,
     val allowRootBridge: Boolean = false,
     val allowVirtualDisplay: Boolean = false,
+    val virtualDisplayPreset: VirtualDisplayResolutionPreset = VirtualDisplayResolutionPreset.STANDARD_720P,
     val rootPolicyMode: RootPolicyMode = RootPolicyMode.ALLOWLIST_ONLY,
     val rootSessionTtlMinutes: Int = 30,
     val customSuBinaryPath: String? = null,
