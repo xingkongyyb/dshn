@@ -2,7 +2,7 @@
 
 > 适用分支：`feat/rust-perf-engine`（版本号 `0.4.0-perf`，`versionCode = 6`）
 > 实机验证平台：`vivo V2352A`（iQOO Z9 Turbo，Android 16 / API 36）与 `vivo V2618A`（SM8850，Android 17 / API 37）
-> 核心原则：**保留 `bxroot` 用户态容器、保留原有 `main` / `aistudio-refactor` 分支、不修改上游 DSH 源码文件**
+> 核心原则：**保留 `bxroot` 用户态容器、保留原有 `main` / `aistudio-refactor` 分支、所有功能集成不修改上游 DSH 源码**（仅容器启动时可选幂等应用 1 处 MIT 许可的 `profile-resolution` 引导加速，不匹配则自动跳过）
 
 ---
 
@@ -66,7 +66,7 @@ Cargo 工作区位于 [rust/Cargo.toml](../../rust/Cargo.toml)，包含两个独
 | 模块 | 职责 | 关键实现 |
 |---|---|---|
 | [extractor.rs](../../rust/dshn-core/src/extractor.rs) | 离线环境高速流式解压 | 直接对 `base.apk` 未压缩 `.bin` 资产切片做 `File` 偏移读取（免二次拷贝），单趟完成 SHA-256 校验、`flate2`/`zlib-rs` 或 `ruzstd` 解压、父目录缓存去重及原生 POSIX `chmod`/`symlink` |
-| [fast_chat.rs](../../rust/dshn-core/src/fast_chat.rs) | 容器冷启期间极速直连对话 | `ureq` + `rustls` + `ring`（ARMv8 硬件加密指令）直连 DeepSeek API，零拷贝 SSE 行解析实时回调 Kotlin；容器一旦就绪无缝切回完整 DSH ACP |
+| [fast_chat.rs](../../rust/dshn-core/src/fast_chat.rs) | 容器冷启期间极速直连对话 | `ureq` + `rustls` + `ring`（ARMv8 硬件加密指令）直连 DeepSeek API，零拷贝 SSE 行解析实时回调 Kotlin；容器就绪后由 `FastChatHandoff` 把已聊轮次无损并入首个 DSH ACP prompt，并在历史重载时经 `SurfaceHistoryFold` 还原为独立消息，守住 DSH 单一会话权威 |
 | [frame.rs](../../rust/dshn-core/src/frame.rs) | 后台虚拟屏零拷贝帧编码 | JNI 直接读取 `ImageReader` 的 `DirectByteBuffer`，计算 64-bit FNV-1a 哈希；帧未变化时返回 `null`（0 拷贝、0 编码、0 传输）；变化时双线性缩放并用 SIMD JPEG 编码输出 |
 | [lib.rs](../../rust/dshn-core/src/lib.rs) | JNI 导出桥 | `DshnNativeCore.kt` 统一封装；支持 `System.getProperty("dshn.native.lib.dir")` 显式 `System.load()`，使独立 `app_process` 也能直接加载 `libdshn_core.so` |
 
@@ -96,7 +96,7 @@ OriginOS（vivo / iQOO）禁用了 `settings put global overlay_display_devices`
 - **行协议**：`VirtualDisplayAgent` 与 [VirtualDisplayController.kt](../../core/bridge/src/main/java/dev/dshn/app/bridge/VirtualDisplayController.kt) 通过 `DSHN_VD:{...}` JSON 行通信，支持 `open` / `launch` / `observe` / `tap` / `swipe` / `input` / `key` / `close`。
 - **MCP 工具**：[DeviceBridgeMcpServer.kt](../../core/bridge/src/main/java/dev/dshn/app/bridge/DeviceBridgeMcpServer.kt) 新增 `device_virtual_display_open` 与 `device_virtual_display_action`，且原有 `device_screenshot` / `device_screen_tree` / `device_tap` / `device_swipe` / `device_input` 均支持传入 `display_id` 自动路由至后台虚拟屏。
 - **无线 ADB 自动回环兜底**：未手动连接无线 ADB 端点时，自动探测 `127.0.0.1:5555`（并给出清晰中文排障指引）。
-- **无饥饿实时预览**：[DeviceBridgeScreen.kt](../../feature/bridge/src/main/java/dev/dshn/feature/bridge/DeviceBridgeScreen.kt) 内的实时预览卡片通过 `suspend` 串行轮询 `observeIfIdle()`（内部使用 `opMutex.tryLock()` + `wait_frame_ms = 0`），保证预览刷新永远不会排队阻塞 `launchApp` / `tap` / `sendKey` / `close`。
+- **无饥饿实时预览与多分辨率切换**：[DeviceBridgeScreen.kt](../../feature/bridge/src/main/java/dev/dshn/feature/bridge/DeviceBridgeScreen.kt) 内的实时预览卡片通过 `suspend` 串行轮询 `observeIfIdle()`（内部使用 `opMutex.tryLock()` + `wait_frame_ms = 0`），保证预览刷新永远不会排队阻塞 `launchApp` / `tap` / `sendKey` / `close`；支持 5 档持久化分辨率预设（`540×960` / `720×1280` / `900×1600` / `1080×1920` / `1280×720` 横屏）且运行中切换自动重建并恢复前台应用。
 
 ---
 
@@ -108,7 +108,7 @@ OriginOS（vivo / iQOO）禁用了 `settings put global overlay_display_devices`
 | **Node 24 V8 编译缓存** | `ContainerLauncher.kt` | 启用 `NODE_COMPILE_CACHE=/root/.cache/dshn-v8`，内置 DSH Sugar 记录的 `pwritev` 零字节缓存自愈保护（检测到 ≥5 个 0 字节文件自动禁用） |
 | **DSH `profile-resolution` 加速** | `EnvManager.kt` | 幂等应用 MIT 许可的 DSH Sugar 补丁，非 linked 安装场景跳过冗余 `lstat`/`realpathSync` |
 | **按需挂载 MCP Relay** | `RuntimeSupervisor.kt` | `bridgeEnabled == false` 时不挂载设备桥 MCP 进程，减少容器启动和常驻开销 |
-| **主线程瘦身与流式聚合** | `AppContainer.kt`、`RuntimeSessionCoordinator.kt`、`EnvManager.kt` | 文件/Socket 初始化移出主线程；资源无变更时跳过冗余 `fsync`；`waitForHealthyRuntime()` 用 `StateFlow.first` 替换 `250 ms` 轮询；流式文本 `40 ms` 批量刷新（首字零延迟） |
+| **主线程瘦身、防截断有序流式与 Markdown 优化** | `AppContainer.kt`、`AcpClient.kt`、`RuntimeSupervisor.kt`、`RuntimeController.kt`、`RuntimeSessionCoordinator.kt`、`MarkdownText.kt` | 文件/Socket 初始化移出主线程；资源无变更跳过冗余 `fsync`；`waitForHealthyRuntime()` 用 `StateFlow.first` 替换 `250 ms` 轮询；ACP stdout 内联有序分发 + 无界 FIFO `Channel` + `LargePayloadXfer` 彻底消除尾块截断与 Binder 溢出；流式文本 `40 ms` 批量刷新（首字零延迟）且 `MarkdownText.appendInline` 改为 O(N) `Regex.matchAt` + 分块记忆化 |
 | **DSH `0.2.2-rc.5` 凭据迁移** | `EnvManager.kt` | 幂等将旧版扁平 `/root/.dsh/.credentials.yaml`（及 `/root/.dsh-terminal/.credentials.yaml`）迁移为 `version: 1` + `refs:` 结构，兼容 BOM、`---` 标记、嵌套 `version:`、单行 `{...}` 与 `0600` 权限 |
 
 ---

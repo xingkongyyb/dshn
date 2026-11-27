@@ -1,6 +1,8 @@
 package dev.dshn.app.runtime
 
 import dev.dshn.app.acp.AcpConfigOption
+import dev.dshn.app.acp.FastChatHandoff
+import dev.dshn.app.acp.FastChatSourceMessage
 import dev.dshn.app.acp.PermissionOption
 import dev.dshn.app.acp.SurfaceHistoryFold
 import dev.dshn.app.data.BannerAction
@@ -158,6 +160,16 @@ class RuntimeSessionCoordinator(
     private var streamFirstChunkEmitted: Boolean = false
     private var fastChatActive: Boolean = false
     private var fastChatHasLocalTurns: Boolean = false
+    private var inFlightFastChatHandoffSessionId: String? = null
+
+    private fun clearFastChatState(cancelActive: Boolean) {
+        if (cancelActive && fastChatActive) {
+            runCatching { DshnNativeCore.cancelFastChat() }
+        }
+        fastChatActive = false
+        fastChatHasLocalTurns = false
+        inFlightFastChatHandoffSessionId = null
+    }
 
     val nativeFastChatAvailable: Boolean get() = DshnNativeCore.isAvailable
     val nativeEngineInfo: String get() = DshnNativeCore.engineInfo()
@@ -455,10 +467,18 @@ class RuntimeSessionCoordinator(
                         syncPendingDialogs()
                     }
                     is RuntimeCallbackEvent.PromptCompleted -> {
+                        val hadStreamOutput = ev.sessionId == currentStreamSessionId &&
+                            (streamTextBuf.isNotEmpty() || streamThinkBuf.isNotEmpty() || streamTools.isNotEmpty())
                         streamingSessions.remove(ev.sessionId)
                         clearPendingForSession(ev.sessionId, cancelOnRuntime = false)
                         if (ev.sessionId == currentStreamSessionId) {
                             finalizeStreamingMessage()
+                        }
+                        if (ev.sessionId == inFlightFastChatHandoffSessionId) {
+                            inFlightFastChatHandoffSessionId = null
+                            if (ev.errorMessage.isNullOrBlank() || ev.stopReason == "cancelled" || hadStreamOutput) {
+                                fastChatHasLocalTurns = false
+                            }
                         }
                         syncActiveStreamingFlag()
                         val reloadHistory = resumedMidStream.remove(ev.sessionId) && ev.sessionId == _activeSessionId.value
@@ -719,7 +739,7 @@ class RuntimeSessionCoordinator(
             }
         }.getOrNull().orEmpty()
         if (!preserveVisibleMessages) {
-            fastChatHasLocalTurns = false
+            clearFastChatState(cancelActive = true)
             detachCurrentStreamBuffers()
             _messages.value = emptyList()
             _usageUsed.value = 0L
@@ -747,6 +767,7 @@ class RuntimeSessionCoordinator(
         scope.launch {
             sessionOpMutex.withLock {
                 if (item.corrupt || item.readOnly) {
+                    clearFastChatState(cancelActive = true)
                     detachCurrentStreamBuffers()
                     _activeSessionId.value = item.id
                     _activeCwd.value = item.cwd ?: "/root"
@@ -804,6 +825,7 @@ class RuntimeSessionCoordinator(
                 json.decodeFromJsonElement(ListSerializer(AcpConfigOption.serializer()), el)
             }
         }.getOrNull().orEmpty()
+        clearFastChatState(cancelActive = true)
         detachCurrentStreamBuffers()
         _activeSessionId.value = sid
         _activeCwd.value = cwd
@@ -915,6 +937,7 @@ class RuntimeSessionCoordinator(
                 streamingSessions.remove(sessionId)
                 clearPendingForSession(sessionId, cancelOnRuntime = true)
                 if (_activeSessionId.value == sessionId) {
+                    clearFastChatState(cancelActive = true)
                     detachCurrentStreamBuffers()
                     _activeSessionId.value = null
                     _activeSessionReadOnly.value = false
@@ -1292,14 +1315,35 @@ class RuntimeSessionCoordinator(
             }
         }
 
+        val priorFastTurns = if (fastChatHasLocalTurns) {
+            FastChatHandoff.selectTurnsForHandoff(
+                messages = _messages.value.map { FastChatSourceMessage(it.id, it.role, it.text) },
+                excludeTrailingUserIfRetry = !appendUserBubble
+            )
+        } else {
+            emptyList()
+        }
+        val wirePrompt = if (priorFastTurns.isNotEmpty()) {
+            FastChatHandoff.pack(priorFastTurns, trimmed)
+        } else {
+            trimmed
+        }
+        val trackFastHandoff = fastChatHasLocalTurns
+
         _interruptedTurnBanner.value = null
         lastSubmittedPromptText = trimmed
         if (appendUserBubble) {
             appendMessage(UiChatMessage("user-${UUID.randomUUID()}", "user", trimmed))
         }
+        if (priorFastTurns.isNotEmpty()) {
+            banner(t("DSH 已就绪，已自动衔接极速直连上下文", "DSH ready — Fast Chat context handed off seamlessly"))
+        }
 
         val assistantId = "asst-${UUID.randomUUID()}"
         streamingSessions.add(sid)
+        if (trackFastHandoff) {
+            inFlightFastChatHandoffSessionId = sid
+        }
         currentStreamSessionId = sid
         currentAssistantMsgId = assistantId
         streamTextBuf.clear()
@@ -1317,8 +1361,11 @@ class RuntimeSessionCoordinator(
                 check(sid == _activeSessionId.value && _sessionAttached.value) {
                     t("对话已关闭或切换，消息未发送", "The chat was closed or switched; message not sent")
                 }
-                runtimeController.sendPrompt(UUID.randomUUID().toString(), sid, trimmed)
+                runtimeController.sendPrompt(UUID.randomUUID().toString(), sid, wirePrompt)
             }.onFailure { err ->
+                if (inFlightFastChatHandoffSessionId == sid) {
+                    inFlightFastChatHandoffSessionId = null
+                }
                 streamingSessions.remove(sid)
                 if (currentStreamSessionId == sid) {
                     finalizeStreamingMessage()
@@ -1371,17 +1418,26 @@ class RuntimeSessionCoordinator(
      * chat in ~0.4 s without waiting for Ubuntu/Node/DSH container cold start.
      */
     private fun sendFastChatPrompt(trimmed: String, appendUserBubble: Boolean): Boolean {
+        val isFirstFastTurn = !fastChatHasLocalTurns
         _interruptedTurnBanner.value = null
         lastSubmittedPromptText = trimmed
         if (appendUserBubble) {
-            appendMessage(UiChatMessage("user-${UUID.randomUUID()}", "user", trimmed))
+            appendMessage(UiChatMessage("${FastChatHandoff.USER_ID_PREFIX}${UUID.randomUUID()}", "user", trimmed))
+        }
+        if (isFirstFastTurn) {
+            banner(
+                t(
+                    "运行环境启动中，已通过极速直连先行回复，就绪后自动衔接 DSH 上下文",
+                    "Runtime starting — replying via Rust Fast Chat; context will hand off to DSH once ready"
+                )
+            )
         }
 
         val historySnapshot = _messages.value
             .filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
             .takeLast(16)
 
-        val assistantId = "fast-asst-${UUID.randomUUID()}"
+        val assistantId = "${FastChatHandoff.ASSISTANT_ID_PREFIX}${UUID.randomUUID()}"
         fastChatActive = true
         fastChatHasLocalTurns = true
         currentStreamSessionId = null

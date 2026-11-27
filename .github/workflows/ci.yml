@@ -2,9 +2,13 @@ name: Android CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feat/rust-perf-engine ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, feat/rust-perf-engine ]
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -25,9 +29,15 @@ jobs:
 
       - name: Verify DSHN bridge & helper JS syntax
         run: |
+          node --check app/src/main/assets/dshn/dshn-dns-preload.cjs
           node --check app/src/main/assets/dshn/dshn-mcp-relay.mjs
           node --check app/src/main/assets/dshn/dshn-pty-runner.mjs
           node --check app/src/main/assets/dshn/dshn-session-bridge.mjs
+
+      - name: Run Rust unit tests & relay compile check
+        run: |
+          cargo test --manifest-path rust/Cargo.toml -p dshn-core --lib --no-default-features
+          cargo check --manifest-path rust/Cargo.toml -p dshn-mcp-relay
 
       - name: Setup Android SDK packages
         run: |
@@ -35,7 +45,7 @@ jobs:
           awk 'BEGIN{for(i=0;i<50;i++)print "y"}' | "$SDKMANAGER" --licenses >/dev/null
           "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Run JVM unit tests & assemble debug APK
+      - name: Run JVM unit tests, debug APK & R8 stagingRelease verification
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          ./gradlew --no-daemon testDebugUnitTest :app:assembleDebug :app:assembleStagingRelease -PdshnSkipBundledEnv=true

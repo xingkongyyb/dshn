@@ -70,12 +70,32 @@ object SurfaceHistoryFold {
                     }
                     val contentText = extractContentText(data["content"])
                     if (contentText.isNotEmpty()) {
-                        turns += HistoryTurn(
-                            id = uniqueTurnId("hist-user-$seq"),
-                            role = "user",
-                            seq = seq,
-                            text = contentText
-                        )
+                        val handoff = FastChatHandoff.unpack(contentText)
+                        if (handoff != null) {
+                            handoff.priorTurns.forEachIndexed { idx, prior ->
+                                turns += HistoryTurn(
+                                    id = uniqueTurnId("hist-fast-${prior.role}-$seq-$idx"),
+                                    role = prior.role,
+                                    seq = seq,
+                                    text = prior.text
+                                )
+                            }
+                            if (handoff.latestUserMessage.isNotEmpty()) {
+                                turns += HistoryTurn(
+                                    id = uniqueTurnId("hist-user-$seq"),
+                                    role = "user",
+                                    seq = seq,
+                                    text = handoff.latestUserMessage
+                                )
+                            }
+                        } else {
+                            turns += HistoryTurn(
+                                id = uniqueTurnId("hist-user-$seq"),
+                                role = "user",
+                                seq = seq,
+                                text = contentText
+                            )
+                        }
                     }
                 }
 

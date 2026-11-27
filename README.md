@@ -2,7 +2,7 @@
 
 English | [中文说明](README.zh.md)
 
-DSHN wraps [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/dsh) in a native Android Material 3 application powered by a Rust native performance core, [`bxroot`](https://github.com/qiannianhuanxiang/bxroot) (`arm64-v8a`), Node.js 24, and a bundled Ubuntu 24.04 user-space runtime — keeping upstream DSH sources completely unpatched while providing native chat UX, plugin management, live context & prompt cache-hit inspection, session history, an interactive PTY terminal, and an opt-in Device Bridge MCP server with Android 14+–17 background virtual displays.
+DSHN wraps [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/dsh) in a native Android Material 3 application powered by a Rust native performance core, [`bxroot`](https://github.com/qiannianhuanxiang/bxroot) (`arm64-v8a`), Node.js `24.22.3`, and a bundled Ubuntu `24.04.5` (ACP Slim) user-space runtime — keeping all functional integrations strictly outside upstream DSH source (ACP, insert-only `--patch`, and MCP, with only one optional idempotent MIT `profile-resolution` boot fast-path) while providing native chat UX, plugin management (including local archive import), live context & prompt cache-hit inspection, session history, an interactive PTY terminal, and an opt-in Device Bridge MCP server with selectable-resolution Android 14+–17 background virtual displays.
 
 ---
 
@@ -57,11 +57,12 @@ DSHN separates native Android workloads from the full Linux/Node agent runtime a
   - Interactive composer context ring (`ContextInspectorMenu`): tapping the percentage ring opens a live popup querying `dshn-session-bridge.mjs` (`context.inspect`) for context-window usage, token breakdown (`system` / `tools` / `messages`), **prompt cache hit rate** (`cacheReadTokens / (uncachedInputTokens + cacheReadTokens + cacheWriteTokens)` + last-turn hit rate), expandable/copyable **System Prompt** sections & dynamic contexts, registered **Tools** (built-in / MCP), and discovered **Skills**.
 - **DSH Plugin Manager (`PluginsScreen`)**:
   - Accessible from both the chat drawer and Settings → Agent → Plugins, backed directly by DSH's `pluginManager` service (`plugins.list`, `setEnabled`, `install`, `remove`, `installPnpm`).
-  - Toggle all 16 shipped official optional bundles offline, install/remove npm or GitHub bundles (`dsh plugin --profile acp add <spec>`), one-tap container `pnpm` bootstrap when missing, and guided runtime restart when ACP HMR is disabled.
+  - Toggle all 16 shipped official optional bundles offline, install/remove npm or GitHub bundles, or **import local plugin packages** (`.tgz` / `.tar.gz` / `.zip` via Android SAF with Zip-Slip protection, or container paths), with one-tap container `pnpm` bootstrap when missing and guided runtime restart when ACP HMR is disabled.
 - **Android 14+–17 Background Virtual Display**:
-  - Launches privileged `VirtualDisplayAgent` via opt-in Root (`su`) or Wireless ADB (`shell,v2,raw:`) using `DisplayManager.createVirtualDisplay`, `UiAutomation`, `InputManager`, and Rust JPEG encoding — bypassing OEM blocks on `overlay_display_devices` without disturbing the main screen.
-- **Zero DSH Source Patches & Transactional Runtime**:
-  - Bundled offline Ubuntu + Node 24 + DSH assets unpack transactionally on first launch with SHA-256 verification, idempotent `.credentials.yaml` migration, and snapshot/rollback support.
+  - Launches privileged `VirtualDisplayAgent` via opt-in Root (`su`) or Wireless ADB (`shell,v2,raw:`) using `DisplayManager.createVirtualDisplay`, `UiAutomation`, `InputManager`, and Rust JPEG encoding — bypassing OEM blocks on `overlay_display_devices` without disturbing the main screen, with 5 persisted resolution presets (`540×960` / `720×1280` / `900×1600` / `1080×1920` / `1280×720` landscape).
+- **Lossless Fast-Chat → ACP Handoff & Transactional Runtime**:
+  - Cold-start Rust Fast-Chat turns are packed into the first DSH ACP prompt (`FastChatHandoff`) so DSH keeps full context and persists the full transcript in its own session log (unpacked seamlessly on history reload by `SurfaceHistoryFold`).
+  - Bundled offline Ubuntu `24.04.5` + Node `24.22.3` + DSH `0.2.2-rc.5` (ACP Slim) assets unpack transactionally on first launch with SHA-256 verification, idempotent `.credentials.yaml` migration, and snapshot/rollback support.
 
 See [docs/architecture/rust-perf-and-virtual-display.md](docs/architecture/rust-perf-and-virtual-display.md) and [docs/architecture/modularization.md](docs/architecture/modularization.md) for architecture details and dual-device benchmarks.
 

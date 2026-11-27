@@ -6,6 +6,10 @@
 - **DSH Plugin Management (`PluginsScreen`, Drawer + Settings → Agent → Plugins)**:
   - Restored native plugin management backed by DSH `0.2.2-rc.5`'s `ctx.get("pluginManager")` service over `dshn-session-bridge.mjs` (`plugins.list`, `plugins.setEnabled`, `plugins.install`, `plugins.remove`, `plugins.installPnpm`).
   - Supports toggling all shipped official optional bundles offline, installing/removing external npm or GitHub bundles (`dsh plugin --profile acp add <spec>`), **importing local plugin packages** (`.tgz` / `.tar.gz` / `.zip` via Android SAF into `/root/.dsh/local-plugins/` with Zip-Slip protection & single-folder ZIP unwrapping, or container absolute paths), one-tap container `pnpm` bootstrap when absent, and a restart-runtime banner when ACP HMR is disabled.
+- **Lossless Fast-Chat → ACP Context Handoff (`FastChatHandoff` + `SurfaceHistoryFold`)**:
+  - Cold-start turns sent via Rust `libdshn_core.so` while the Ubuntu/DSH container is booting are now seamlessly carried into the first DSH ACP prompt via a structured handoff envelope (`[DSHN_FAST_CHAT_HANDOFF_V1]`), persisted in DSH's own session log as the single source of truth, and unpacked back into distinct user/assistant turns when reloading history via `SurfaceHistoryFold` (retried safely if the handoff turn errors before replying, and cleared cleanly on session switch/close).
+- **CI Coverage Expansion (`.github/workflows/ci.yml`)**:
+  - Extended GitHub Actions CI to run on both `main` and `feat/rust-perf-engine`, adding `dshn-dns-preload.cjs` syntax check, Rust unit tests (`cargo test -p dshn-core --lib --no-default-features`), `dshn-mcp-relay` compile check, and R8 `:app:assembleStagingRelease -PdshnSkipBundledEnv=true` verification.
 - **Selectable Virtual Display Resolutions (`VirtualDisplayResolutionPreset`)**:
   - Added 5 persisted presets (`540×960` Fast, `720×1280` Balanced, `900×1600` Sharp, `1080×1920` FHD, `1280×720` Landscape) in `SettingsStore`, `DeviceBridgeScreen`, `VirtualDisplayController`, `VirtualDisplayAgent`, and `DeviceBridgeMcpServer` (live-switches resolution cleanly when already running).
 - **Fixed Output Truncation & Streaming Performance**:
