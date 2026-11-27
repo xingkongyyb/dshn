@@ -6,7 +6,10 @@
 
 ---
 
-## 1. 背景与目标
+## 1. 背景、目标与 `perf` 含义
+
+> **`perf` 是什么？**
+> 分支 `feat/rust-perf-engine` 与版本 `0.4.0-perf` 中的 **`perf`** 是 **Performance（性能优化版）** 的简称（并非 Linux `perf` 采样工具）。它代表在不放弃完整 DSH/Linux 能力的前提下，把移动端最吃 CPU/内存/启动时间的环节全部重构提速。
 
 在 `v0.3.2` 及模块化重构（`aistudio-refactor`）基础上，实机性能剖析暴露了 5 处关键瓶颈：
 
@@ -16,15 +19,21 @@
 4. **MCP 桥接额外起第二个 Node 24 进程**：旧版每个 ACP 会话都会在容器内再拉起一个完整 V8 进程跑 `dshn-mcp-relay.mjs`，浪费内存与启动时间。
 5. **OriginOS 等厂商系统禁用 `overlay_display_devices`**：传统命令行虚拟屏方案失效，Agent 操控手机时会打断用户主屏。
 
-`feat/rust-perf-engine` 围绕上述瓶颈引入了 **Rust 原生核心（JNI + 静态 musl）**、**R8 Release 裁剪**、**冷启动与 DSH 引导加速** 以及 **Android 14+–17 后台虚拟屏**。
+`feat/rust-perf-engine` 围绕上述瓶颈引入了 **Rust 原生核心（JNI + 静态 musl）**、**R8 Release 裁剪**、**冷启动与 DSH 引导加速**、**Android 14+–17 后台虚拟屏**，并在不改上游源码的前提下经 `dshn-session-bridge.mjs` 扩展了 **DSH 原生插件管理** 与 **上下文 / 缓存命中率实时透视弹窗**。
 
 ---
 
-## 2. 总体架构
+## 2. 总体架构（Bionic 原生 + Ubuntu glibc 容器 + 静态 musl）
+
+| 运行层 | 运行环境 / C 库 | 执行特点与开销说明 |
+|---|---|---|
+| **`:app` 主进程与 `libdshn_core.so`** | Android 原生 **Bionic** | 纯原生 `arm64-v8a`，**零翻译、零额外开销** |
+| **`:runtime` 容器内的 Node 24 + DSH** | `bxroot` + Ubuntu 24.04 **glibc** | CPU 指令全原生 ARM64（**零架构翻译**）；仅文件/路径访问经过 `bxroot` 的 `LD_PRELOAD` 用户态轻度拦截（远轻于 `proot` 的 `ptrace` 拦截） |
+| **`/opt/dshn/dshn-mcp-relay`** | 静态链接 **musl**（零 libc 依赖） | 393 KB 静态二进制，直连宿主机 UDS，消除每个会话多余的 Node V8 进程 |
 
 ```text
-┌──────────────────────── :app 进程 (Kotlin / Compose) ────────────────────────┐
-│  MainActivity / ChatScreen / DeviceBridgeScreen / Settings / Terminal        │
+┌──────────────────────── :app 进程 (Android Bionic · Kotlin/Compose) ─────────┐
+│  MainActivity / ChatScreen (上下文透视弹窗) / PluginsScreen / DeviceBridge    │
 │  ├─ RuntimeSessionCoordinator (40ms 流式聚合 + 0.25s Rust 极速直连回退)       │
 │  ├─ DshnNativeCore ──JNI──▶ libdshn_core.so (Rust, 16KB 对齐, 2.16 MB)        │
 │  │    ├─ extractor.rs  : 零拷贝 APK 切片流式解压 (.tar.gz / .tar.zst) + SHA256│
@@ -35,14 +44,15 @@
 └───────────────────────────┬──────────────────────────┬───────────────────────┘
                             │ AIDL + UDS               │ su / ADB shell,v2,raw
                             ▼                          ▼
-┌────────────── :runtime 进程 (bxroot 容器) ──────────────┐  ┌─ app_process (uid 0/2000) ─┐
+┌────────── :runtime 进程 (bxroot + Ubuntu glibc) ────────┐  ┌─ app_process (uid 0/2000) ─┐
 │  libbxroot.so + Ubuntu 24.04 + Node 24 + DSH 0.2.2-rc.5│  │ VirtualDisplayAgent.java   │
 │  ├─ NODE_COMPILE_CACHE=/root/.cache/dshn-v8 (带自愈)    │  │ ├─ DisplayManager 独立虚拟屏 │
 │  ├─ DSH Sugar profile-resolution 幂等加速补丁           │  │ ├─ ImageReader RGBA Surface│
-│  ├─ dshn-session-bridge.mjs (--patch 历史/提问桥)       │  │ ├─ 加载 libdshn_core.so    │
-│  └─ /opt/dshn/dshn-mcp-relay (390KB 静态 Rust musl)     │  │ ├─ UiAutomation 界面树      │
-│       └─ 直连 DSHN_DEVICE_MCP_HOST_SOCK ──▶ 宿主机 UDS  │  │ └─ InputManager 直接触控   │
-└─────────────────────────────────────────────────────────┘  └────────────────────────────┘
+│  ├─ dshn-session-bridge.mjs (--patch 桥接：历史/提问/   │  │ ├─ 加载 libdshn_core.so    │
+│  │    context.inspect 上下文与缓存命中率 / plugins.*)   │  │ ├─ UiAutomation 界面树      │
+│  └─ /opt/dshn/dshn-mcp-relay (393KB 静态 Rust musl)     │  │ └─ InputManager 直接触控   │
+│       └─ 直连 DSHN_DEVICE_MCP_HOST_SOCK ──▶ 宿主机 UDS  │  └────────────────────────────┘
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---

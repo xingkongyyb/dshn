@@ -2,33 +2,94 @@
 
 [English](README.md) | 中文说明
 
-DSHN 是基于 Android 原生 Jetpack Compose (Material 3) 与 [`bxroot`](https://github.com/qiannianhuanxiang/bxroot)（`arm64-v8a`）构建的 [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/dsh) 原生安卓客户端，在 **不修改任何 DSH 源码** 的前提下，通过 ACP 协议、只增式 `--patch` 插件及标准 MCP 服务器，在手机本地提供完整的 Agent 对话、多会话历史恢复、真实 PTY 终端以及默认关闭的可选设备桥接能力。
+DSHN 是基于 Android 原生 Jetpack Compose (Material 3)、Rust 原生性能核心与 [`bxroot`](https://github.com/qiannianhuanxiang/bxroot)（`arm64-v8a`）构建的 [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/dsh) 原生安卓客户端。
 
-## 核心架构
+它在 **不修改任何上游 DSH 源码** 的前提下，开箱内置离线运行环境（Ubuntu 24.04 + Node.js 24 + DSH `0.2.2-rc.5`），通过标准 **ACP 协议**、只增式 `--patch` Cordis 桥接插件与 **MCP 服务器**，在手机本地提供完整的 Agent 编码与对话体验、插件管理、上下文与缓存命中率透视、真实 PTY 终端，以及默认关闭的可选设备桥接与后台虚拟屏能力。
 
-- **Rust 原生加速核心（`feat/rust-perf-engine` / `v0.4.0-perf`）**：
-  - `libdshn_core.so`（16 KB 页对齐 AArch64 JNI，2.16 MB）：单趟流式 `.tar.gz`/`.tar.zst` 零拷贝解压与硬件 SHA-256、`rustls`+`ring` 原生极速直连（容器冷启期间 ~0.25 s 即可对话）、虚拟屏 RGBA `DirectByteBuffer` → FNV-1a 脏帧跳过 → SIMD JPEG 编码。
-  - `libdshn_mcp_relay.so`（393 KB 静态 musl）：取代原先每个会话多起的 Node 24 V8 中继进程，直连宿主机 UDS。
-  - 启用 R8 Release 裁剪（DEX `-94.5%`、APK `-60 MB`），在 Android 17（SM8850）上冷启动进入 **~95 ms**、常驻内存下降 **30%**；详见 [Rust 性能核心与后台虚拟屏架构文档](docs/architecture/rust-perf-and-virtual-display.md)。
-- **Android 14+–17 后台虚拟屏**：通过已授权 Root 或无线 ADB（`shell,v2,raw:`）启动独立 `VirtualDisplayAgent`，直接经 `DisplayManager` 建立受信任虚拟屏并结合 `UiAutomation`、`InputManager` 与 Rust JPEG 实现不打扰主屏的后台操控与实时预览，绕过 OriginOS 等厂商对 `overlay_display_devices` 的限制。
-- **独立 `:runtime` 进程守护 + `specialUse` 前台服务**：容器运行时与主界面隔离；内置单写文件锁、`stderr` 环形日志、5 秒本地看门狗、1 分钟最多 3 次有界重启、流异常降级和中断轮次 `TOOL_OUTCOME_UNKNOWN` 重试提示；集成 `NODE_COMPILE_CACHE` 与 MIT 许可的 DSH Sugar `profile-resolution` 引导加速。
-- **零侵入式双向桥接**：
-  - `assets/dshn/dshn-bridge.patch.yml` + `dshn-session-bridge.mjs` 通过 `--patch` 挂入 Cordis 上下文，提供只读会话列表 / surface 历史折叠（损坏文件只读展示、绝不移动/篡改）、slash 命令及 `ask_user_question` 交互弹窗。
-  - `DeviceBridgeMcpServer` 监听应用私有目录 `files/bridge/device-mcp.sock`，容器内优先由静态 Rust `/opt/dshn/dshn-mcp-relay`（回退 `dshn-mcp-relay.mjs`）通过 ACP `mcpServers` 按需挂载。
-- **设备桥接、可选 Root 授权与安全默认值**：
-  - 适配最新 `@deepseek-ai/dsh@0.2.2-rc.5`（含 `CONTENT_REFUSED` 识别、旧版 `.credentials.yaml` 自动迁移、自定义端点/搜索提供方、ACP 能力探测、`zstd` 回滚版本检查与事务化容器内升级）。
-  - 所有设备读取、屏幕无障碍控制、后台虚拟屏、无线 ADB 与 **宿主机 Root (`su`)** 开关 **默认全关**；Root 授权仅通过 Magisk / KernelSU / SukiSU / APatch 等标准超级用户管理器经用户交互授予，支持会话 TTL 自动过期与一键撤销锁定。
-  - 所有高风险操作（点击、滑动、文本输入、全局按键、`device_adb_exec`、`device_root_exec`、`device_virtual_display_*`）默认开启逐次弹窗确认并附带风险警示；ADB (`AdbArgvPolicy`) 与 Root (`RootCommandPolicy`) 均采用结构化 `argv` 策略校验，且 Root 通道在所有模式下强制禁止访问应用自身 `files/security/` 密钥与审计目录，越权一律返回 `[POLICY_BLOCKED]` 并记录脱敏审计日志。
-- **双模式隔离终端**：默认使用 DSH 内置 `node-pty` 与 `DSH_HOME=/root/.dsh-terminal` 运行容器 Ubuntu Shell（配齐 `ESC / TAB / CTRL / 方向键` 与实时按键模式）；在用户显式授予 Root 权限后，可切换至带红色警示标记的 Android 宿主机 Root (`su`) 终端。
+---
+
+## 什么是 `perf`？（`v0.4.0-perf` / `feat/rust-perf-engine`）
+
+版本号和分支名里的 **`perf`** 是 **Performance（性能优化版）** 的缩写（不是 Linux 的 `perf` 性能分析命令），代表 DSHN 面向移动端做的一整套**全链路提速、瘦身与降耗升级**：
+
+1. **热点下沉到 Rust 原生代码**：把原先在 JVM / Node 里最耗时的 4 件事——离线环境解压、容器冷启动前的极速直连对话、后台虚拟屏帧编码、跨容器 MCP 中继——全部用 AArch64 Rust 重写。
+2. **R8 极致裁剪**：启用 `stagingRelease` / `release` R8 代码优化与资源收缩，DEX 从 13 个 `54.71 MB` 降到 **1 个 `3.02 MB`（-94.5%）**，APK 从 `180 MB` 降至 **`120 MB`**（去掉 `115 MB` 离线环境包后 App 本体仅约 **`5.2 MB`**）。
+3. **冷启动与运行时加速**：主线程去阻塞 I/O、Node 24 V8 字节码编译缓存（`NODE_COMPILE_CACHE`）、MIT 许可的 DSH Sugar `profile-resolution` 引导加速、按需挂载 MCP 中继、40 ms 流式聚合刷新——在 Android 17（SM8850）实机上冷启动进入 **~95 ms**、常驻内存下降 **30%**。
+4. **“秒开即聊”体验**：容器冷启动期间（约 2–3 秒），Rust 原生 `rustls` 客户端在约 **0.25 s** 内即可提供极速直连对话，容器就绪后自动切回完整 DSH ACP（带全部工具、Skills 与插件）。
+
+---
+
+## 整体架构：双层混合运行时
+
+DSHN 采用 **「Android Bionic 原生层 + Ubuntu glibc 用户态容器 + 静态 musl 桥接」** 三段协同、**双进程隔离**（`:app` UI 进程与 `:runtime` 容器守护进程）以及 **11 个 Gradle 模块**（`:app` + 5 个 `:core:*` + 5 个 `:feature:*`）的清晰分层架构：
+
+```text
+┌─────────────────────── :app 进程 (Android Bionic 原生环境) ───────────────────────┐
+│  Kotlin / Jetpack Compose UI (对话 / 插件管理 / 上下文透视 / 终端 / 设备桥 / 设置)  │
+│  ├─ 11 模块解耦：:core:{data,security,runtime,bridge,ui} + :feature:{5 个页面模块}  │
+│  ├─ Rust JNI 核心 libdshn_core.so (Bionic, 16KB 对齐, 2.16 MB, 零翻译零开销)       │
+│  │    ├─ extractor.rs : APK 零拷贝切片流式解压 (.tar.gz/.tar.zst) + 硬件 SHA-256   │
+│  │    ├─ fast_chat.rs : rustls + ring 极速直连 SSE 对话 (~0.25 s 可用)             │
+│  │    └─ frame.rs     : RGBA DirectByteBuffer → FNV-1a 脏帧跳过 → SIMD JPEG        │
+│  ├─ DeviceBridgeMcpServer (私有 UDS: files/bridge/device-mcp.sock, 0600)          │
+│  └─ VirtualDisplayController (经已授权 Root 或无线 ADB 驱动独立后台虚拟屏)          │
+└─────────────────────────────┬──────────────────────────┬──────────────────────────┘
+                              │ AIDL + Unix Socket       │ su / ADB shell,v2,raw
+                              ▼                          ▼
+┌─────────── :runtime 进程 (bxroot + Ubuntu 24.04 glibc) ──────────┐ ┌─ app_process ─┐
+│  前台服务 (specialUse) 隔离守护，容器崩溃不影响主界面                │ │ 后台虚拟屏代理  │
+│  ├─ CPU 指令：原生 ARM64，零指令集翻译                             │ │ DisplayManager│
+│  ├─ 路径兼容：bxroot LD_PRELOAD 轻量拦截（远轻于 proot ptrace）     │ │ ImageReader   │
+│  ├─ Node 24 + DSH 0.2.2-rc.5 (`dsh --profile acp --patch ...`)   │ │ UiAutomation  │
+│  ├─ dshn-session-bridge.mjs (--patch 注入，不改 DSH 源码)：        │ │ InputManager  │
+│  │    会话历史 / 上下文与缓存命中率透视 / 插件管理 / 提问与斜杠命令   │ └───────────────┘
+│  └─ /opt/dshn/dshn-mcp-relay (393 KB 静态 musl Rust，不依赖 libc)  │
+│       └─ 取代额外 Node 进程，直连宿主机 device-mcp.sock             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 关于运行环境与开销的直白说明
+
+| 组件 | 运行环境 | 是否有翻译 / 额外开销？ |
+|---|---|---|
+| **App UI、Rust 核心（解压 / 极速直连 / 图像编码）、虚拟屏代理** | Android 原生 **Bionic** | **零翻译、零额外开销**，直接调用原生指令与系统调用 |
+| **DSH 主体、Node.js 24、`node-pty`、Ubuntu CLI 工具** | `bxroot` + Ubuntu 24.04 **glibc** | **CPU 指令零翻译**（全原生 `arm64-v8a`）；仅文件/路径访问经 `bxroot` 的 `LD_PRELOAD` 用户态轻度改写，比 `proot`（`ptrace`）快一个数量级，换取完整 Linux/Node 生态且无需魔改 DSH |
+| **设备桥中继 `dshn-mcp-relay`** | 静态链接 **musl**（零 libc 依赖） | **零额外 V8 进程**，直接连接宿主机 UDS 路径 |
+
+---
+
+## 核心功能
+
+- **原生对话与交互体验**：
+  - **清爽模型与思考强度选择器**：合并为单一胶囊下拉菜单，去掉冗长英文简介，支持一键切换模型与中文化思考强度档位。
+  - **上下文百分比交互透视弹窗**：点击输入框旁的百分比圆环，实时弹出当前会话的上下文占用与三段占比条（系统提示词 / 工具 / 对话消息）、**Prompt 缓存命中率**（按 DSH `sessionProjections` 精确口径计算，含缓存读取/写入/未命中/输出与最近一轮命中率）、可展开复制的 **System Prompt** 分段与动态运行时上下文、已挂载 **Tools**（标注内置 / `MCP` / 按需加载）以及已发现的 **Skills**。
+  - **多会话持久化与恢复**：经 `--patch` 插件 `dshn-session-bridge.mjs` 读取真实 DSH 会话列表与 surface 历史折叠（损坏文件只读展示、绝不挪动或篡改原文件），支持斜杠命令补全与 `ask_user_question` 原生弹窗。
+- **DSH 原生插件管理**：
+  - 侧边栏抽屉与「设置 → 智能体 → 插件管理」双入口，直接对接 DSH `0.2.2-rc.5` 内置的 `pluginManager` 服务。
+  - 支持直接离线开关随 DSH 内置的 16 个官方可选插件包，支持输入 npm 包名或 GitHub 仓库安装/卸载外部插件（等同 `dsh plugin --profile acp add <包名>`），自动检测容器内 `pnpm` 并提供一键补装，以及 ACP 非热重载场景下的重启生效引导。
+- **Android 14+–17 后台虚拟屏**：
+  - 通过已授权 Root 或无线 ADB（`shell,v2,raw:`）启动独立 `VirtualDisplayAgent`，直接经 `DisplayManager` 创建受信任虚拟屏并结合 `UiAutomation`、`InputManager` 与 Rust JPEG 实现不打扰主屏的后台操控与实时预览，绕过 OriginOS 等厂商对 `overlay_display_devices` 的限制。
+- **独立 `:runtime` 进程守护与环境事务**：
+  - `specialUse` 前台服务 + 单写文件锁 + `stderr` 环形日志 + 5 秒看门狗 + 有界重启 + 中断轮次 `TOOL_OUTCOME_UNKNOWN` 保护；内置离线环境事务解压、旧版 `.credentials.yaml` 自动迁移、版本快照与格式兼容回滚。
+- **双模式隔离终端与安全默认值**：
+  - 默认基于 `node-pty`（`DSH_HOME=/root/.dsh-terminal`）提供带快捷键栏的 Ubuntu 容器终端；显式授权 Root 后可切换宿主机 Root 终端。
+  - 所有设备读屏、无障碍操作、后台虚拟屏、无线 ADB 与 Root 开关 **默认全关**；高危操作逐次弹窗确认；ADB (`AdbArgvPolicy`) 与 Root (`RootCommandPolicy`) 均执行结构化 `argv` 策略校验，全模式强制禁止访问应用私有 `files/security/` 密钥与审计目录。
+
+详细原理与双机真机实测数据见：
+- [Rust 性能核心与后台虚拟屏架构文档](docs/architecture/rust-perf-and-virtual-display.md)
+- [11 模块化分层架构说明](docs/architecture/modularization.md)
+- [项目总览与演进记录](PROJECT.md)
+
+---
 
 ## 构建与测试
 
-环境要求：JDK 21、Android SDK Platform 36（`compileSdk 36`、`minSdk 30`、`arm64-v8a`）；如需重编 Rust 原生库另需 Rust + Android NDK r27c（预编译 `.so` 已随仓库提供）。
+环境要求：JDK 21、Android SDK Platform 36（`compileSdk 36`、`minSdk 30`、`arm64-v8a`）；预编译 Rust `.so` 已随仓库提供，如需重编 Rust 核心另需 Rust 工具链与 Android NDK r27c。
 
 ```bash
 ./gradlew testDebugUnitTest :app:assembleStagingRelease
-# 开发期跳过 115 MB 离线环境打包：
+# 开发期跳过 115 MB 离线环境资产打包（APK 约 5 MB）：
 ./gradlew :app:assembleStagingRelease -PdshnSkipBundledEnv=true
 ```
 
-许可证、第三方声明与 Ubuntu rootfs GPL 源码书面提供条款见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+许可证、第三方声明与 Ubuntu rootfs GPL 源码书面提供条款见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，版本变更见 [CHANGELOG.md](CHANGELOG.md)。

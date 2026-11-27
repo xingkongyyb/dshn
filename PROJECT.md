@@ -1,18 +1,20 @@
 # DSHN 项目文档
 
 > **DeepSeek Harness Native** —— 在 Android 上以原生 App 运行完整 DeepSeek Harness 智能体。
-> 默认免 ROOT（亦支持已 Root 设备的可选标准 `su` 授权）、免 Termux、零 DSH 补丁。bxroot 用户态容器 + 原生 Compose UI + 标准 ACP 协议。
-> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-27（`feat/rust-perf-engine` / `v0.4.0-perf`：Rust 原生性能核心 + R8 裁剪 + Android 14+–17 后台虚拟屏，详见 [docs/architecture/rust-perf-and-virtual-display.md](docs/architecture/rust-perf-and-virtual-display.md)）。
+> 默认免 ROOT（亦支持已 Root 设备的可选标准 `su` 授权）、免 Termux、开箱内置离线运行环境、零 DSH 源码补丁。双层混合架构（Android Bionic + Rust 原生性能核心 / `bxroot` + Ubuntu 24.04 glibc 容器）+ 原生 Compose UI + 标准 ACP 协议。
+> 本文档是项目 living document：进度、架构、踩坑、剩余路线图。最后更新 2026-11-27（`feat/rust-perf-engine` / `v0.4.0-perf`：Rust 原生性能核心、R8 裁剪、Android 14+–17 后台虚拟屏、DSH 插件管理与交互式上下文透视弹窗，详见 [docs/architecture/rust-perf-and-virtual-display.md](docs/architecture/rust-perf-and-virtual-display.md)）。
 
 ---
 
-## 1. 项目概述
+## 1. 项目概述与 `perf` 含义
 
-DSHN 让用户在手机上拥有一个完整的 DSH 编码智能体：原生界面对话、流式输出、工具调用、审批，agent 在手機本地的 Ubuntu 容器里执行真实命令。
+DSHN 让用户在手机上拥有一个完整的 DSH 编码智能体：原生界面对话、流式输出、工具调用、审批、插件管理、上下文与缓存命中率透视，agent 在手机本地的 Ubuntu 容器里执行真实命令。
 
-**与 DSHA 的区别**：DSHA 是 WebView 包壳（web 崩溃/UI 不符安卓习惯/更新易损坏）；DSHN 全原生 Compose，经标准 ACP 协议驱动 DSH，零补丁，事务化环境。
+- **与 DSHA 的区别**：DSHA 是 WebView 包壳（web 崩溃 / UI 不符安卓习惯 / 更新易损坏）；DSHN 全原生 Compose，经标准 ACP 协议与只增式 `--patch` 桥接驱动 DSH，零源码补丁，事务化离线环境。
+- **什么是 `perf`（`v0.4.0-perf` / `feat/rust-perf-engine`）**：`perf` 是 **Performance（性能优化版）** 的缩写，并非 Linux `perf` 工具，指面向移动端做的四项系统级性能优化：① 将解压 / 极速直连 / 虚拟屏编码 / MCP 中继 4 个热点下沉到 AArch64 **Rust 原生库**；② 启用 **R8 Release 裁剪**（DEX `-94.5%`、APK `-60 MB`）；③ 冷启动与容器引导加速（主线程去 I/O、`NODE_COMPILE_CACHE`、DSH `profile-resolution` 加速、40 ms 流式聚合，Android 17 冷启动进入 `~95 ms`、内存降 `30%`）；④ 容器冷启期间由 Rust 极速直连提供约 `0.25 s` 可用的秒开对话体验。
 
 **核心设计文档**：`Documents/1/_docs/DSHN原生安卓应用设计_20261109.md`（v2 审计修订版）
+**架构专题文档**：[docs/architecture/rust-perf-and-virtual-display.md](docs/architecture/rust-perf-and-virtual-display.md)、[docs/architecture/modularization.md](docs/architecture/modularization.md)
 **集成面 spike 证据**：`spike/INTEGRATION-SPIKE-REPORT.md`
 
 ---
@@ -60,44 +62,50 @@ DSH：Hello! It's great to meet you — how can I help today?
 
 ---
 
-## 3. 架构与组件
+## 3. 架构与组件（`v0.4.0-perf` 双层混合运行时 + 11 模块结构）
 
+DSHN 采用 **双进程隔离**（`:app` UI 进程与 `:runtime` 容器守护进程）和 **三层混合运行时**：
+- **Android Bionic 原生层**：Kotlin/Compose UI 与 Rust JNI 核心（`libdshn_core.so`）直接运行在 Android Bionic 上，**零翻译、零开销**。
+- **`bxroot` + Ubuntu 24.04 glibc 容器层**：Node 24、DSH `0.2.2-rc.5` 与 `node-pty` 以原生 ARM64 指令运行（**零指令集翻译**），仅文件系统路径映射经 `bxroot` 的 `LD_PRELOAD` 轻量拦截（远轻于 `proot` `ptrace`）。
+- **静态 musl 中继层**：`dshn-mcp-relay`（393 KB 静态 `aarch64-unknown-linux-musl`）零 libc 依赖，取代多余的 Node 24 V8 中继进程，直连宿主机 UDS。
+
+```text
+┌─────────────────── :app 进程 (Android Bionic · Kotlin/Compose + Rust JNI) ───────────────────┐
+│  11 个 Gradle 模块：:app + :core:{data,security,runtime,bridge,ui} + :feature:{5 个页面}       │
+│  ├─ ChatScreen（模型选择 / 上下文与缓存命中率透视弹窗 / 流式渲染 / 工具与提问卡片）             │
+│  ├─ PluginsScreen（抽屉 + 设置双入口：DSH pluginManager 开关/装卸/一键补装 pnpm）              │
+│  ├─ DeviceBridgeScreen + VirtualDisplayController（Root / 无线 ADB 后台虚拟屏与实时预览）      │
+│  ├─ DshnNativeCore ──JNI──▶ libdshn_core.so（零拷贝解压 / 0.25s 极速直连 / SIMD JPEG）         │
+│  └─ DeviceBridgeMcpServer（UDS: files/bridge/device-mcp.sock, 0600）                          │
+└───────────────────────────────┬────────────────────────────────┬──────────────────────────────┘
+                                │ AIDL + Unix Socket             │ su / ADB shell,v2,raw
+                                ▼                                ▼
+┌──────────── :runtime 进程 (bxroot + Ubuntu 24.04 glibc) ────────────┐ ┌── app_process ──┐
+│  RuntimeService (specialUse 前台服务) + RuntimeSupervisor            │ │ VirtualDisplay  │
+│  ├─ dsh --profile acp --patch /opt/dshn/dshn-bridge.patch.yml       │ │ DisplayManager  │
+│  ├─ dshn-session-bridge.mjs (会话 / context.inspect / plugins.* /   │ │ ImageReader     │
+│  │    commands / ask_user_question)                                 │ │ UiAutomation    │
+│  └─ /opt/dshn/dshn-mcp-relay (393 KB 静态 Rust musl，直连宿主机 UDS) │ │ InputManager    │
+└─────────────────────────────────────────────────────────────────────┘ └─────────────────┘
 ```
-┌──────────── App 进程（Kotlin/Compose）────────────┐
-│ MainActivity → ChatScreen（Compose）              │
-│ ChatViewModel（StateFlow，事件溯源渲染）           │
-│ AcpClient（纯 Kotlin ACP JSON-RPC over stdio）     │
-│ AcpSessionManager（进程生命周期 + stderr 排空）    │
-│ ContainerLauncher（bxroot 启动封装）              │
-└──────────────────────────────────────────────────┘
-        stdio ↕ ACP JSON-RPC
-   bxroot 容器（Ubuntu 24.04 + Node 24 + DSH 0.2.2-rc.1）
-        └ dsh --profile acp
-```
 
-### 源码清单（`app/src/main/java/dev/dshn/app/` 及 `assets/dshn/`）
+### 核心模块与源码清单
 
-| 文件 | 职责 |
+| 模块 / 路径 | 职责 |
 |---|---|
-| `MainActivity.kt` | 入口：首启向导闸门、路由回退栈（`AppRoute` + 动画切换 + 系统返回键）、带操作按钮的提示条、状态栏明暗适配与全局权限/确认弹窗托管 |
-| `acp/AcpClient.kt` | ACP JSON-RPC 2.0 客户端（含 `mcpServers`、`resume`、动态 `configOptions`、流损坏监测） |
-| `acp/SurfaceHistoryFold.kt` | 把 `sessionQuery.readSurface()` 事件折叠为 UI 历史卡片并识别 `TOOL_OUTCOME_UNKNOWN` |
-| `runtime/ContainerLauncher.kt` | bxroot 启动封装：最小 bind 集（含 `0700` `bridge:/run/dshn-bridge`）、`--patch` 支持 |
-| `runtime/EnvManager.kt` | `env-manifest.json`、原子部署 `assets/dshn/`、DNS 修复、`~/.dsh` 事务快照与回滚兼容检查、容器自检 |
-| `runtime/SessionBridgeClient.kt` | UDS 客户端：会话列表、surface 历史、slash 命令、交互式 `ask_user_question` 订阅 |
-| `runtime/RuntimeSupervisor.kt` / `RuntimeService.kt` / `RuntimeController.kt` | 独立 `:runtime` 进程 AIDL 守护、`specialUse` 前台服务、单写锁、5s 看门狗、有界重启、Turn WakeLock、`@file:` 大负载传递 |
-| `runtime/TerminalPtySession.kt` | 基于容器内 `node-pty` 与独立 `DSH_HOME=/root/.dsh-terminal` 的终端控制器 |
-| `bridge/DeviceBridgeMcpServer.kt` / `DshnAccessibilityService.kt` / `WirelessAdbClient.kt` / `RootAuthManager.kt` / `ConfirmationBroker.kt` | 设备桥 MCP 服务（UDS，11 个固定工具含 `device_root_status` / `device_root_exec`）、无障碍读屏/截图/手势、NSD + Plain-TCP/TLS ADB 客户端、标准 `su` Root 授权与 TTL 管理、高危操作逐次确认弹窗 |
-| `runtime/HostRootShellSession.kt` | 基于已授权 `su` 的宿主机 Root 交互终端会话控制器 |
-| `security/KeystoreCrypto.kt` / `AuditLogger.kt` / `AdbArgvPolicy.kt` / `RootCommandPolicy.kt` | Keystore AES-GCM 加密、受限 `audit.jsonl` 审计、严苛 ADB / Root 结构化 `argv` 策略（硬隔离 `files/security/`） |
-| `data/SettingsStore.kt` | 加密凭据与权限/设备桥（默认全关）/浅色默认与深浅外观设置持久化 |
-| `ui/DshnTheme.kt`, `UiComponents.kt`, `MarkdownText.kt`, `SystemHelpers.kt`, `MainViewModel.kt`, `SetupScreen.kt`, `ChatScreen.kt`, `SettingsScreen.kt`, `DeviceBridgeScreen.kt`, `TerminalScreen.kt`, `DeviceLabScreen.kt` | 主题与 `tr()` 双语、品牌标识/设置行/横幅等通用组件、轻量 Markdown 渲染、统一状态与导航管理、首启向导与各业务界面 |
-| `assets/dshn/{dshn-bridge.patch.yml,dshn-session-bridge.mjs,dshn-mcp-relay.mjs,dshn-pty-runner.mjs}` | 只增式 Cordis `--patch` 插件、MCP UDS 转发器与 `node-pty` 启动器 |
+| `app/` | 应用壳、`DshnApplication`、`MainActivity`、`AppContainer`（显式构造注入）、`DshnNavHost`（类型安全路由）与 `assets/dshn/`（只增式 `--patch` 脚本） |
+| `rust/dshn-core` & `rust/dshn-mcp-relay` | 16 KB 页对齐 AArch64 Rust 原生库：`libdshn_core.so`（解压 / 极速直连 / 虚拟屏 JPEG 编码）与 `libdshn_mcp_relay.so`（静态 musl MCP 中继） |
+| `core/runtime/` | `AcpClient`、`SurfaceHistoryFold`、`ContainerLauncher`、`EnvManager`（离线环境解压 / 快照 / 凭据迁移 / `profile-resolution` 加速）、`SessionBridgeClient`、`ContextAndPluginModels`、`RuntimeService` / `RuntimeSupervisor` / `RuntimeController` / `RuntimeSessionCoordinator`、`TerminalPtySession`、`HostRootShellSession` |
+| `core/bridge/` | `DeviceBridgeMcpServer`（UDS MCP 服务）、`DshnAccessibilityService`、`WirelessAdbClient`、`RootAuthManager`、`ConfirmationBroker`、`VirtualDisplayAgent.java`、`VirtualDisplayController` |
+| `core/security/` & `core/data/` & `core/ui/` | Keystore AES-GCM 加密、`AuditLogger`、`AdbArgvPolicy`、`RootCommandPolicy`、`SettingsStore`、Material 3 主题与 `tr()` 双语通用组件 |
+| `feature/chat/` | `ChatScreen`、`ChatComposer`、`ModelPickerMenu`、`ContextInspectorMenu`（上下文占用 / 缓存命中率 / System Prompt / Tools / Skills 弹窗）、`SessionDrawer` |
+| `feature/settings/` | `SettingsHomeScreen`、`PluginsScreen`（DSH 插件管理）、模型与 API Key、权限与工作区、后台保活、环境与快照、日志诊断、关于 |
+| `feature/bridge/` & `feature/terminal/` & `feature/setup/` | 设备桥与后台虚拟屏预览（`DeviceBridgeScreen` / `DeviceLabScreen`）、双模式终端（`TerminalScreen`）、首启设置向导（`SetupScreen`） |
 
-### vendored 运行时
+### vendored 与内置运行时
 
-- `app/src/main/jniLibs/arm64-v8a/`：bxroot v0.2.5 八件套（见 `vendor/bxroot/PROVENANCE.md`）
-- 容器 rootfs：`/data/data/dev.dshn.app/files/linux/ubuntu`（Ubuntu 24.04，首启需推送，见 §4）
+- `app/src/main/jniLibs/arm64-v8a/`：`bxroot` v0.2.5 运行时（见 `vendor/bxroot/PROVENANCE.md`）+ 预编译 `libdshn_core.so` + `libdshn_mcp_relay.so`
+- `app/src/main/assets/env/`：APK 内置离线 Ubuntu 24.04.5 + Node.js 24.22.3 + `@deepseek-ai/dsh@0.2.2-rc.5`（首启由 Rust `extractor.rs` 事务化校验解压至 `/data/data/dev.dshn.app/files/linux/ubuntu`，无需电脑手动 `adb push`）
 
 ---
 
